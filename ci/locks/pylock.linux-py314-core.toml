@@ -1288,11 +1288,6 @@ wheels = [
 ]
 
 [[packages]]
-name = "stringzilla"
-version = "4.1.0"
-sdist = { url = "https://files.pythonhosted.org/packages/c3/89/ae2e60081277f43b1d2cf3782598018f22fd0e926ea8845cadbbb085335d/stringzilla-4.1.0.tar.gz", upload-time = 2025-10-02T20:22:32Z, size = 473879, hashes = { sha256 = "ab7182191c8ab5ffdf0370a6f20961c75316ec35d948bfd8cd8326d464bb2224" } }
-
-[[packages]]
 name = "sympy"
 version = "1.14.0"
 sdist = { url = "https://files.pythonhosted.org/packages/83/d3/803453b36afefb7c2bb238361cd4ae6125a569b4db67cd9e79846ba2d68c/sympy-1.14.0.tar.gz", upload-time = 2025-04-27T18:05:01Z, size = 7793921, hashes = { sha256 = "d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517" } }
