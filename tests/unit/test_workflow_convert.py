@@ -10,6 +10,7 @@ from comfy.component_model.workflow_convert import (
     _VIRTUAL_NODE_TYPES,
     _collect_subgraph_defs,
     _extra_widgets_after,
+    _get_sg_widget_positional,
     _is_widget_type,
     _map_unknown_widgets,
     _map_widgets,
@@ -1708,3 +1709,21 @@ class TestRealTemplateConversion:
         # Group nodes themselves should not be in the output.
         for gid in group_node_ids:
             assert gid not in result, f"group node {gid} should be expanded"
+
+
+def test_subgraph_widget_shared_with_non_widget_input():
+    definition = {
+        'inputs': [{'name': 'prompt'}, {'name': 'enabled'}],
+        'nodes': [
+            {'id': 1, 'inputs': [{'name': 'on_false', 'link': 10}]},
+            {'id': 2, 'inputs': [{'name': 'prompt', 'widget': {'name': 'prompt'}, 'link': 11}]},
+            {'id': 3, 'inputs': [{'name': 'enabled', 'widget': {'name': 'enabled'}, 'link': 12}]},
+        ],
+        'links': [
+            [10, -10, 0, 1, 0, 'STRING'],
+            [11, -10, 0, 2, 0, 'STRING'],
+            [12, -10, 1, 3, 0, 'BOOLEAN'],
+        ],
+    }
+    assert _get_sg_widget_positional(definition, 'prompt', ['a cat', True]) == (True, 'a cat')
+    assert _get_sg_widget_positional(definition, 'enabled', ['a cat', True]) == (True, True)
