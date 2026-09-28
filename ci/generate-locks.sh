@@ -9,7 +9,6 @@ common=(
   tests/custom_nodes_requirements.txt
   --extra dev
   --constraints tests/opencv_constraints.txt
-  --constraints ci/torch-constraints.txt
   --excludes ci/lock-excludes.txt
   --extra-index-url https://nodes.appmana.com/simple
   --index-strategy unsafe-best-match
@@ -30,12 +29,14 @@ without_torch=(
 )
 
 uv pip compile "${common[@]}" \
+  --constraints ci/torch-constraints.txt \
   "${without_torch[@]}" \
   --python-version 3.12 \
   --python-platform linux \
   --output-file ci/locks/pylock.linux-py312.toml
 
 uv pip compile "${common[@]}" \
+  --constraints ci/torch-constraints.txt \
   "${without_torch[@]}" \
   --override ci/numpy1-overrides.txt \
   --python-version 3.12 \
@@ -43,24 +44,28 @@ uv pip compile "${common[@]}" \
   --output-file ci/locks/pylock.linux-py312-numpy1.toml
 
 uv pip compile "${common[@]}" \
+  --constraints ci/torch-constraints.txt \
   "${without_torch[@]}" \
   --python-version 3.11 \
   --python-platform linux \
   --output-file ci/locks/pylock.linux-py311.toml
 
 uv pip compile "${common[@]}" \
+  --constraints ci/torch-constraints.txt \
   "${without_torch[@]}" \
   --python-version 3.12 \
   --python-platform windows \
   --output-file ci/locks/pylock.windows-py312.toml
 
 MACOSX_DEPLOYMENT_TARGET=14.0 uv pip compile "${common[@]}" \
+  --constraints ci/torch-constraints.txt \
   --python-version 3.12 \
   --python-platform macos \
   --torch-backend auto \
   --output-file ci/locks/pylock.macos-py312.toml
 
 uv pip compile "${common[@]}" \
+  --constraints ci/arch-torch-constraints.txt \
   --python-version 3.14 \
   --python-platform linux \
   --torch-backend cpu \

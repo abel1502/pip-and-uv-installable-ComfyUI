@@ -1,0 +1,5 @@
+# Latest stable Torch tested by the rolling Arch CPU job.
+# Keep device-specific locks on ci/torch-constraints.txt.
+torch==2.14.0
+torchvision==0.29.0
+torchaudio==2.11.0
