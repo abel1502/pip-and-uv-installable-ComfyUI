@@ -48,6 +48,7 @@ def install_custom_node_from_spec(spec: CustomNodeSpec, base_dir: Path) -> Path:
 
 def install_all_nodes(base_dir: Path) -> dict[str, Path]:
     installed: dict[str, Path] = {}
+    failures = []
     for spec in CUSTOM_NODE_REGISTRY:
         if spec.node_id in installed:
             continue
@@ -56,6 +57,9 @@ def install_all_nodes(base_dir: Path) -> dict[str, Path]:
             installed[spec.node_id] = path
         except Exception:
             logger.warning("Failed to install %s", spec.node_id, exc_info=True)
+            failures.append(spec.node_id)
+    if failures:
+        raise RuntimeError(f"Custom-node installation failed: {', '.join(failures)}")
     return installed
 
 

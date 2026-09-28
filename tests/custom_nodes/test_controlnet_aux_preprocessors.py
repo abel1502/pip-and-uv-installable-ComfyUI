@@ -35,7 +35,7 @@ def _discover_preprocessors() -> list[str]:
 
     ep = next(
         ep for ep in entry_points().select(group="comfyui.custom_nodes")
-        if "controlnet" in ep.name.lower()
+        if ep.name.lower().replace("_", "-") == "comfyui-controlnet-aux"
     )
     mod = ep.load()
     roots = _extract_vanilla_custom_node_roots(mod)
@@ -48,13 +48,15 @@ def _discover_preprocessors() -> list[str]:
     exported = _vanilla_load_custom_nodes_1(vendor_path)
     selector = exported.NODE_CLASS_MAPPINGS.get("ControlNetPreprocessorSelector")
     if selector is None:
-        return []
+        raise RuntimeError("comfyui-controlnet-aux did not register ControlNetPreprocessorSelector")
 
     inputs = selector.INPUT_TYPES()
     preprocessors = inputs.get("required", {}).get("preprocessor", [None])[0]
     if isinstance(preprocessors, list):
         _ALL_PREPROCESSORS = [p for p in sorted(preprocessors) if p != "none"]
 
+    if not _ALL_PREPROCESSORS:
+        raise RuntimeError("ControlNetPreprocessorSelector returned no preprocessors")
     return _ALL_PREPROCESSORS
 
 
@@ -96,11 +98,9 @@ def _make_workflow(preprocessor_name: str) -> dict:
     }
 
 
-try:
-    _preprocessor_names = _discover_preprocessors()
-except Exception as exc:
-    logger.warning("Failed to discover preprocessors: %s", exc)
-    _preprocessor_names = []
+def pytest_generate_tests(metafunc):
+    if "preprocessor" in metafunc.fixturenames:
+        metafunc.parametrize("preprocessor", _discover_preprocessors())
 
 
 def _find_facade_vendor_dir() -> Path | None:
@@ -111,7 +111,7 @@ def _find_facade_vendor_dir() -> Path | None:
             name = dist.name
         except Exception:
             continue
-        if name and "controlnet" in name.lower():
+        if name and name.lower().replace("_", "-") == "comfyui-controlnet-aux":
             loc = dist._path.parent if hasattr(dist, "_path") else None
             if loc:
                 facade = loc / f"_appmana_facade_{name.replace('-', '_')}"
@@ -132,7 +132,6 @@ _XFAIL_PREPROCESSORS = {
 }
 
 
-@pytest.mark.parametrize("preprocessor", _preprocessor_names)
 @pytest.mark.asyncio
 async def test_aio_preprocessor(preprocessor: str, tmp_path: Path):
     reason = _XFAIL_PREPROCESSORS.get(preprocessor)

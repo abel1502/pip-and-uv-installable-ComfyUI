@@ -517,11 +517,11 @@ def _register_packages_from_directory(directory: str) -> None:
 
 @contextmanager
 def _prepare_pixeloe_import(module: types.ModuleType, module_path: str, block_installation: bool):
-    # PixelOE imports its obsolete pkg_resources installer even when runtime
-    # installation is blocked. Dependencies are supplied by the package manager.
-    # The facade vendors PixelOE's library under src alongside its nodes.
+    # PixelOE vendors its library under src. Its obsolete pkg_resources
+    # installer is unnecessary when that library is already bundled, including
+    # normal CLI startup where runtime installation is allowed.
     sys.path.insert(0, join(module_path, "src"))
-    if not block_installation:
+    if not block_installation and not isdir(join(module_path, "src")):
         yield
         return
     name = f"{module.__name__}.nodes.installer"

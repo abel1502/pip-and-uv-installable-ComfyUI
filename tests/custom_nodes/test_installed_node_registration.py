@@ -1,5 +1,13 @@
 """Exercise every installed custom-node distribution through the runtime loaders."""
+import json
 import logging
+import os
+import socket
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
 from importlib.metadata import entry_points
 from importlib.resources import files
 
@@ -17,7 +25,7 @@ from comfy.nodes.vanilla_node_importing import _vanilla_load_custom_nodes_2
 from comfy_compatibility.vanilla import prepare_vanilla_environment
 
 
-def test_installed_custom_node_registration(caplog):
+def test_installed_custom_node_registration(caplog, tmp_path):
     installed = {}
     for entry_point in entry_points(group='comfyui.custom_nodes'):
         installed.setdefault(entry_point.dist.name, []).append(entry_point)
@@ -73,3 +81,46 @@ def test_installed_custom_node_registration(caplog):
         )
         assert len(result) == 3 and result[0].shape == (1, 64, 64, 3)
         assert all(torch.isfinite(image).all() for image in result)
+
+    _assert_fresh_server_nodes(tmp_path, set(all_nodes.NODE_CLASS_MAPPINGS))
+
+
+def _assert_fresh_server_nodes(base, expected):
+    # Exercise serve's own defaults in a fresh process, rather than inheriting
+    # the test execution context's runtime-installation and registration state.
+    with socket.socket() as sock:
+        sock.bind(('127.0.0.1', 0))
+        port = sock.getsockname()[1]
+    log_path = base / 'server.log'
+    env = os.environ.copy()
+    env.pop('PYTHONPATH', None)
+    with log_path.open('w') as log:
+        process = subprocess.Popen([
+            sys.executable, '-m', 'comfy.cmd.main', 'serve', '--cpu',
+            '--listen', '127.0.0.1', '--port', str(port), '--base-directory', str(base),
+        ], cwd=base, env=env, stdout=log, stderr=subprocess.STDOUT)
+        try:
+            deadline = time.monotonic() + 300
+            while time.monotonic() < deadline:
+                assert process.poll() is None, log_path.read_text(errors='replace')[-12000:]
+                try:
+                    with urllib.request.urlopen(f'http://127.0.0.1:{port}/object_info', timeout=30) as response:
+                        info = json.load(response)
+                    break
+                except (urllib.error.URLError, TimeoutError):
+                    time.sleep(1)
+            else:
+                raise AssertionError('Server readiness timeout: ' + log_path.read_text(errors='replace')[-12000:])
+            assert expected <= info.keys(), f'Nodes missing from fresh server: {sorted(expected - info.keys())}'
+            assert 'IPAdapterPlus is not installed' not in json.dumps(info)
+            with urllib.request.urlopen(f'http://127.0.0.1:{port}/', timeout=30) as response:
+                assert response.status == 200
+                assert 'html' in response.headers.get('Content-Type', '')
+            print(f'Fresh server: all {len(expected)} custom nodes and frontend available')  # noqa: T201
+        finally:
+            process.terminate()
+            try:
+                process.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=10)
