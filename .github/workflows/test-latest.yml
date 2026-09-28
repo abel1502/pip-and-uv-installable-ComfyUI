@@ -41,6 +41,8 @@ jobs:
         run: |
           .venv/bin/python -m ruff check comfy/ comfy_extras/ comfy_api/ comfy_api_nodes/ comfy_compatibility/ comfy_execution/
           .venv/bin/python -m pylint --disable=W4902 comfy/ comfy_extras/ comfy_api/ comfy_api_nodes/ comfy_compatibility/ comfy_execution/
+      - name: Custom-node registration
+        run: .venv/bin/python -m pytest -v -s --timeout=900 tests/custom_nodes/test_installed_node_registration.py
       - name: Unit tests
         env:
           COMFYUI_UNIT_DISABLE_CUSTOM_NODES: "1"

@@ -1,3 +1,9 @@
 # Pip-installable custom nodes that require the stable CUDA ABI wheel set.
 # Install only in workflow jobs that set matrix.target.stable_abi_cuda.
 comfyui-nunchaku==1.0.1
+# PuLID imports these at startup; --no-deps must still supply its leaf dependencies.
+insightface==0.7.3
+facexlib==0.3.0
+filterpy==1.4.5
+easydict==1.13
+prettytable==3.18.0

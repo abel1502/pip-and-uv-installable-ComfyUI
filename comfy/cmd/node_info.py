@@ -2,10 +2,16 @@
 from __future__ import annotations
 
 from comfy_api.internal import _ComfyNodeInternal
+from comfy_compatibility.vanilla import vanilla_node_class_mappings
 from ..nodes.python_module_metadata import resolve_python_module_name
 
 
 def node_info(node_class: str, node_class_mappings: dict, node_display_name_mappings: dict) -> dict:
+    with vanilla_node_class_mappings():
+        return _node_info(node_class, node_class_mappings, node_display_name_mappings)
+
+
+def _node_info(node_class: str, node_class_mappings: dict, node_display_name_mappings: dict) -> dict:
     obj_class = node_class_mappings[node_class]
     if issubclass(obj_class, _ComfyNodeInternal):
         return obj_class.GET_NODE_INFO_V1()

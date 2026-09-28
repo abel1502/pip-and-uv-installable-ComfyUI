@@ -117,6 +117,8 @@ jobs:
           assert result.item() == 32
           PY
           python -m comfy.cmd.main --quick-test-for-ci --cwd /workspace/src
+      - name: Custom-node registration
+        run: python -m pytest -v -s --timeout=900 tests/custom_nodes/test_installed_node_registration.py
       - name: Unit and CUDA tests
         run: |
           pytest -v --timeout=900 \

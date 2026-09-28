@@ -508,6 +508,25 @@ def _register_packages_from_directory(directory: str) -> None:
 
 
 @contextmanager
+def _prepare_pixeloe_import(module: types.ModuleType, module_path: str, block_installation: bool):
+    # PixelOE imports its obsolete pkg_resources installer even when runtime
+    # installation is blocked. Dependencies are supplied by the package manager.
+    # The facade vendors PixelOE's library under src alongside its nodes.
+    sys.path.insert(0, join(module_path, "src"))
+    if not block_installation:
+        yield
+        return
+    name = f"{module.__name__}.nodes.installer"
+    installer = types.ModuleType(name)
+    installer.install_pixeloe = lambda: None
+    sys.modules[name] = installer
+    try:
+        yield
+    finally:
+        sys.modules.pop(name, None)
+
+
+@contextmanager
 def _exec_mitigations(module: types.ModuleType, module_path: str) -> Generator[ExportedNodes, Any, None]:
     config = current_execution_context()
     block_installation = config and config.configuration and config.configuration.block_runtime_package_installation
@@ -526,6 +545,7 @@ def _exec_mitigations(module: types.ModuleType, module_path: str) -> Generator[E
         patch_pip_install_popen() if block_installation else nullcontext(),
         # sys.path protection — prevent custom nodes from polluting the path
         _protect_sys_path(),
+        _prepare_pixeloe_import(module, module_path, block_installation) if basename(module_path).lower() == "pixeloe" else nullcontext(),
     ):
         if needs_file_mitigation:
             from ..cmd import folder_paths
@@ -607,8 +627,8 @@ def _vanilla_load_custom_nodes_1(module_path, ignore: set = None) -> ExportedNod
                 for name, display_name in module.NODE_DISPLAY_NAME_MAPPINGS.items():
                     if name not in ignore:
                         exported_nodes.NODE_DISPLAY_NAME_MAPPINGS[name] = display_name
-        else:
-            logger.error(f"Skip {module_path} module for custom nodes due to the lack of NODE_CLASS_MAPPINGS.")
+        elif not callable(getattr(module, "comfy_entrypoint", None)):
+            logger.error(f"Skip {module_path} module for custom nodes: no NODE_CLASS_MAPPINGS or callable comfy_entrypoint.")
 
         exported_nodes.update(_comfy_entrypoint_upstream_v3_imports(module, ignore=ignore))
     except Exception as e:
