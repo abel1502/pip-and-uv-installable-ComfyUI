@@ -82,6 +82,12 @@ def test_installed_custom_node_registration(caplog, tmp_path):
         assert len(result) == 3 and result[0].shape == (1, 64, 64, 3)
         assert all(torch.isfinite(image).all() for image in result)
 
+    pixelized, = all_nodes.NODE_CLASS_MAPPINGS["PixelOEPixelize+"]().execute(
+        image=torch.rand(1, 64, 64, 3), downscale_mode="contrast",
+        target_size=16, patch_size=4, thickness=1, color_matching=False, upscale=True,
+    )
+    assert pixelized.shape == (1, 64, 64, 3) and torch.isfinite(pixelized).all()
+
     _assert_fresh_server_nodes(tmp_path, set(all_nodes.NODE_CLASS_MAPPINGS))
 
 

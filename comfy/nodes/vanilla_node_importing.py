@@ -9,6 +9,7 @@ import sys
 import time
 import types
 from contextlib import contextmanager, nullcontext
+from functools import wraps
 from os.path import join, basename, dirname, isdir, isfile, exists, abspath, split, splitext, realpath
 from typing import Iterable, Any, Generator
 from unittest.mock import patch
@@ -261,12 +262,35 @@ _MODEL_NAME_TO_HF_REPO: dict[str, str] = {
 def _apply_post_import_patches(module_name: str) -> None:
     """Apply patches to custom-node submodules after they finish importing.
 
-    These patches fix cases where custom nodes construct local model paths
-    that may not exist, instead of using HuggingFace repo IDs that
-    ``from_pretrained`` can resolve and cache automatically.
+    Adapt dependency API moves and resolve custom-node model paths through
+    the shared download infrastructure.
     """
+    _patch_essentials_pixeloe(module_name)
     _patch_segformer_model_resolution(module_name)
     _install_deferred_controlnet_patches(module_name)
+
+
+def _patch_essentials_pixeloe(module_name: str) -> None:
+    if module_name.lower() != "comfyui_essentials":
+        return
+    node = sys.modules[module_name].NODE_CLASS_MAPPINGS.get("PixelOEPixelize+")
+    if node is None:
+        return
+    original_execute = node.execute
+
+    @wraps(original_execute)
+    def execute(self, *args, **kwargs):
+        # Essentials still imports the original NumPy implementation from its
+        # old path. PixelOE now ships that same API under legacy.pixelize.
+        try:
+            importlib.import_module("pixeloe.pixelize")
+        except ModuleNotFoundError as exc:
+            if exc.name != "pixeloe.pixelize":
+                raise
+            sys.modules["pixeloe.pixelize"] = importlib.import_module("pixeloe.legacy.pixelize")
+        return original_execute(self, *args, **kwargs)
+
+    node.execute = execute
 
 
 def _patch_segformer_model_resolution(module_name: str) -> None:
