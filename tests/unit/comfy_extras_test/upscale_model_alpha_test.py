@@ -1,15 +1,13 @@
 import torch
 
-from comfy.cli_args import args as cli_args
+from types import SimpleNamespace
 
-if not torch.cuda.is_available():
-    cli_args.cpu = True
-
-import comfy.model_management  # noqa: E402
-from comfy_extras.nodes_upscale_model import ImageUpscaleWithModel  # noqa: E402
+from comfy import model_management
+from comfy_extras.nodes import nodes_upscale_model
+from comfy_extras.nodes.nodes_upscale_model import ImageUpscaleWithModel, UpscaleModelManageable
 
 
-class StubUpscaleModel:
+class StubUpscaleModel(torch.nn.Module):
     """Stands in for a spandrel ImageModelDescriptor that only accepts RGB."""
 
     scale = 2
@@ -18,9 +16,11 @@ class StubUpscaleModel:
         load_device = torch.device("cpu")
 
     def __init__(self):
+        super().__init__()
+        self.weight = torch.nn.Parameter(torch.ones(()))
         self.seen_channels = None
 
-    def __call__(self, image):
+    def forward(self, image):
         self.seen_channels = image.shape[1]
         assert image.shape[1] == 3, "model was handed a non-RGB tensor"
         return torch.nn.functional.interpolate(image, scale_factor=self.scale, mode="nearest")
@@ -35,9 +35,12 @@ def rgba_image():
 
 
 def upscale(image, monkeypatch):
-    monkeypatch.setattr(comfy.model_management, "load_models_gpu", lambda *args, **kwargs: None)
+    monkeypatch.setattr(nodes_upscale_model, "load_models_gpu", lambda *args, **kwargs: None)
+    monkeypatch.setattr(model_management, "get_torch_device", lambda: torch.device("cpu"))
+    monkeypatch.setattr(model_management, "unet_offload_device", lambda: torch.device("cpu"))
     model = StubUpscaleModel()
-    return model, ImageUpscaleWithModel.execute(model, image)
+    descriptor = SimpleNamespace(model=model, device=torch.device("cpu"), input_channels=3, output_channels=3, scale=2)
+    return model, ImageUpscaleWithModel.execute(UpscaleModelManageable(descriptor, "test"), image)
 
 
 def test_rgba_input_does_not_crash_and_alpha_is_preserved(monkeypatch):

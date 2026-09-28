@@ -27,67 +27,18 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
-_PROMOTED_WIDGET_SHIFT = (
-    "frontend 1.47 shifts linked promoted subgraph widget values into later widgets",
-)
 _STALE_SUBGRAPH_WIDGET_ORDER = (
     "saved subgraph proxy widget order disagrees with the current node schema",
 )
-_DYNAMIC_COMBO_MIGRATION_SHIFT = (
-    "frontend dynamic-combo migration inserts a model value and shifts saved subwidgets",
-)
 
 _EXCLUDED_TEMPLATE_REASONS: dict[str, tuple[str, ...]] = {
-    "api_flux2": ("frontend 1.53.6 drops four connected dynamic Autogrow image inputs on load",),
-    "template_image_speech_to_video": ("frontend 1.53.6 loses the rerouted subgraph prompt link and emits an empty string",),
-    "basic_image_color_adjustment": ("frontend 1.53.6 throws DataCloneError while loading CURVE widgets",),
-    "api_google_gemini_omni_flash_i2v": ("frontend 1.53.6 drops image inputs and routes an IMAGE link to aspect_ratio",),
+    "api_flux2": ("frontend 1.54.7 drops connected dynamic Autogrow image inputs on load",),
+    "template_image_speech_to_video": ("frontend 1.54.7 loses the rerouted subgraph prompt link and emits an empty string",),
+    "basic_image_color_adjustment": ("frontend 1.54.7 throws DataCloneError while loading CURVE widgets",),
+    "api_google_gemini_omni_flash_i2v": ("frontend 1.54.7 drops image inputs and routes an IMAGE link to aspect_ratio",),
     "video_minimax_h3_fun_controlnet_union": _STALE_SUBGRAPH_WIDGET_ORDER,
-    # Frontend bug: compressWidgetInputSlots shrinks SubgraphNode input
-    # array but resolveInput still indexes by original slot, going OOB.
-    "gsc_starter_2": ("SimpleMath+ extra 'a', KSamplerAdvanced steps=8 vs 4",),
-    "image_flux2_klein_image_edit_9b_distilled": ("subgraph boundary inputs",),
-    # Frontend bug: duplicate inner links to same subgraph output slot
-    # cause resolveSubgraphOutputLink to return undefined.
-    "templates-car_product": ("duplicate subgraph output links",),
-    "templates_rob_kling3_0_multishot_llm_product": ("subgraph output to StringToInt.data",),
-    # Frontend 1.47 keeps the placeholder for a promoted widget after that
-    # boundary widget is linked. Every later proxy value is then assigned to
-    # the preceding inner widget, producing prompts with model names, sizes,
-    # prompts, and strengths in the wrong fields. The Python converter
-    # deliberately retains the correctly named proxy mapping.
-    "Image_capybara_v0_1_image_edit": _PROMOTED_WIDGET_SHIFT,
-    "Image_capybara_v0_1_text_to_image": _PROMOTED_WIDGET_SHIFT,
-    "image_flux2_klein_text_to_image": _PROMOTED_WIDGET_SHIFT,
-    "image_kandinsky5_t2i": _PROMOTED_WIDGET_SHIFT,
-    "image_longcat_text_to_image": _PROMOTED_WIDGET_SHIFT,
-    "image_newbieimage_exp0_1-t2i": _PROMOTED_WIDGET_SHIFT,
-    "image_qwen_Image_2512_controlnet": _PROMOTED_WIDGET_SHIFT,
-    "image_qwen_image_instantx_controlnet": _PROMOTED_WIDGET_SHIFT,
-    "video_capybara_v0_1_image_to_video": _PROMOTED_WIDGET_SHIFT,
-    "video_capybara_v0_1_video_edit": _PROMOTED_WIDGET_SHIFT,
-    "video_ltx2_canny_to_video": _PROMOTED_WIDGET_SHIFT,
-    "video_ltx2_i2v": _PROMOTED_WIDGET_SHIFT,
-    "video_ltx2_i2v_distilled": _PROMOTED_WIDGET_SHIFT,
-    "video_ltx2_i2v_lora": _PROMOTED_WIDGET_SHIFT,
-    "video_ltx2_t2v": _PROMOTED_WIDGET_SHIFT,
-    "video_ltx2_t2v_distilled": _PROMOTED_WIDGET_SHIFT,
-    # The packaged workflow stores timesignature before language, while the
-    # current node schema reverses them. Frontend loads the old positional
-    # values without reconciling the serialized widget names.
-    "audio_ace_step_1_5_split_llm": _STALE_SUBGRAPH_WIDGET_ORDER,
-    # Frontend migrates the dynamic model selector, inserts the underlying
-    # provider model slug, then reads that value as the promoted aspect ratio.
-    "templates_graphic_design_recomposer": _DYNAMIC_COMBO_MIGRATION_SHIFT,
-    # These packaged workflows retain a positional widget array from an older
-    # subgraph definition. Frontend SubgraphNode.configure delegates to
-    # _applyPromotedWidgetValues, which walks the current promoted inputs and
-    # assigns that stale array sequentially. The resulting frontend prompts
-    # put sizes, booleans, seeds, and model names into unrelated fields. Keep
-    # validating the Python converter's correctly named mapping elsewhere.
     "utility_sdpose_multi_person": _STALE_SUBGRAPH_WIDGET_ORDER,
     "utility_sdpose_multi_person_video": _STALE_SUBGRAPH_WIDGET_ORDER,
-    "video_wan_animate2": _STALE_SUBGRAPH_WIDGET_ORDER,
 }
 
 _EXCLUDED_TEMPLATE_IDS = frozenset(_EXCLUDED_TEMPLATE_REASONS)

@@ -1,13 +1,13 @@
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
-import comfy.model_management
-import comfy.ops
-from comfy.ldm.trellis2.vae import SparseTensor, SparseLinear, sparse_cat, VarLenTensor
+from ... import model_management
+from ... import ops
+from .vae import SparseTensor, SparseLinear, sparse_cat, VarLenTensor
 from typing import Optional, Tuple, Literal, Union, List
-from comfy.ldm.modules.attention import AttentionTensorContainer, ComfyAttention, optimized_attention
-from comfy.ldm.genmo.joint_model.layers import TimestepEmbedder
-from comfy.ldm.flux.math import apply_rope, apply_rope1
+from ..modules.attention import AttentionTensorContainer, ComfyAttention, optimized_attention
+from ..genmo.joint_model.layers import TimestepEmbedder
+from ..flux.math import apply_rope, apply_rope1
 
 
 def dense_attention(q, k, v, **kwargs):
@@ -83,8 +83,8 @@ class MultiHeadRMSNorm(nn.Module):
 
     def forward(self, x: Union[VarLenTensor, torch.Tensor]) -> Union[VarLenTensor, torch.Tensor]:
         if isinstance(x, VarLenTensor):
-            return x.replace(F.rms_norm(x.feats, (x.feats.shape[-1],)) * comfy.ops.cast_to_input(self.gamma, x.feats))
-        return F.rms_norm(x, (x.shape[-1],)) * comfy.ops.cast_to_input(self.gamma, x)
+            return x.replace(F.rms_norm(x.feats, (x.feats.shape[-1],)) * ops.cast_to_input(self.gamma, x.feats))
+        return F.rms_norm(x, (x.shape[-1],)) * ops.cast_to_input(self.gamma, x)
 
 class SparseRotaryPositionEmbedder(nn.Module):
     def __init__(self, head_dim: int, dim: int = 3, rope_freq: Tuple[float, float] = (1.0, 10000.0), device=None):
@@ -337,7 +337,7 @@ class ModulatedSparseTransformerCrossBlock(nn.Module):
 
     def _forward(self, x: SparseTensor, mod: torch.Tensor, context, transformer_options=None) -> SparseTensor:
         if self.share_mod:
-            modulation = comfy.ops.cast_to_input(self.modulation, mod)
+            modulation = ops.cast_to_input(self.modulation, mod)
             shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (modulation + mod).chunk(6, dim=1)
         else:
             shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(mod).chunk(6, dim=1)
@@ -517,7 +517,7 @@ class MultiHeadAttention(nn.Module):
             assert phases is not None, "Phases must be provided for RoPE"
             # phases is [L, head_dim/2, 2, 2]; broadcast to [1, L, 1, ...]
             # to align with q/k of shape [B, L, H, head_dim].
-            f_cis = comfy.model_management.cast_to(phases, device=q.device).unsqueeze(0).unsqueeze(2)
+            f_cis = model_management.cast_to(phases, device=q.device).unsqueeze(0).unsqueeze(2)
             del qkv
             q, k = apply_rope(q, k, f_cis)
             q, k, v = AttentionTensorContainer(q), AttentionTensorContainer(k), AttentionTensorContainer(v)
@@ -599,7 +599,7 @@ class ModulatedTransformerCrossBlock(nn.Module):
     def _forward(self, x: torch.Tensor, mod: torch.Tensor, context,
                  phases: Optional[torch.Tensor] = None, transformer_options=None) -> torch.Tensor:
         if self.share_mod:
-            mod = comfy.ops.cast_to_input(self.modulation, mod) + mod
+            mod = ops.cast_to_input(self.modulation, mod) + mod
         else:
             mod = self.adaLN_modulation(mod)
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = mod.unsqueeze(1).chunk(6, dim=-1)

@@ -5,10 +5,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import folder_paths
-from app.assets.api.schemas_in import UploadError
-from app.assets.api.upload import parse_multipart_upload
-from app.assets.services.ingest import upload_from_temp_path
+from comfy.cmd import folder_paths
+from comfy.app.assets.api.schemas_in import UploadError
+from comfy.app.assets.api.upload import parse_multipart_upload
+from comfy.app.assets.services.ingest import upload_from_temp_path
 
 
 @pytest.mark.asyncio

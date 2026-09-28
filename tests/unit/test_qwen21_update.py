@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 
 from comfy import model_management
+from comfy.cmd.latent_preview import TAESDPreviewerImpl
 from comfy.sd import VAE
 from comfy.taesd.taesd import TAESD
 from comfy.text_encoders.qwen_vl import process_qwen2vl_images
@@ -66,3 +67,9 @@ def test_upscaler_preserves_alpha(monkeypatch):
     result = nodes_upscale_model.ImageUpscaleWithModel.execute(model, image)[0]
     assert result.shape == (1, 128, 128, 4)
     torch.testing.assert_close(result, torch.full_like(result, 0.3))
+
+
+def test_qwen_tiny_vae_preview_is_rgb(qwen_tiny_vae):
+    preview = TAESDPreviewerImpl(qwen_tiny_vae).decode_latent_to_preview(torch.zeros(1, 64, 2, 3))
+    assert preview.mode == "RGB"
+    assert preview.size == (48, 32)

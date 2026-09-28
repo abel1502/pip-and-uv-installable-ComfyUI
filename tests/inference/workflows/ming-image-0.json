@@ -1,0 +1,139 @@
+{
+  "80:1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "ming_image_0.1_design_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "80:14": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "ming_image_vae_bf16.safetensors"
+    }
+  },
+  "80:15": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "80:3",
+        0
+      ],
+      "vae": [
+        "80:14",
+        0
+      ]
+    }
+  },
+  "80:18": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler"
+    }
+  },
+  "80:21": {
+    "class_type": "BasicScheduler",
+    "inputs": {
+      "denoise": 1,
+      "model": [
+        "80:42",
+        0
+      ],
+      "scheduler": "simple",
+      "steps": 2
+    }
+  },
+  "80:23": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "ming_image_0.1_ling_mini_2.0_int8_convrot.safetensors",
+      "device": "default",
+      "type": "qwen_image"
+    }
+  },
+  "80:26": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 43
+    }
+  },
+  "80:3": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "guider": [
+        "80:73",
+        0
+      ],
+      "latent_image": [
+        "80:41",
+        0
+      ],
+      "noise": [
+        "80:26",
+        0
+      ],
+      "sampler": [
+        "80:18",
+        0
+      ],
+      "sigmas": [
+        "80:21",
+        0
+      ]
+    }
+  },
+  "80:40": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "80:23",
+        0
+      ],
+      "text": "A red ceramic cup on a wooden table"
+    }
+  },
+  "80:41": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "batch_size": 1,
+      "height": 256,
+      "width": 256
+    }
+  },
+  "80:42": {
+    "class_type": "ModelSamplingFlux",
+    "inputs": {
+      "base_shift": 0.5,
+      "height": 256,
+      "max_shift": 1.15,
+      "model": [
+        "80:1",
+        0
+      ],
+      "width": 256
+    }
+  },
+  "80:73": {
+    "class_type": "BasicGuider",
+    "inputs": {
+      "conditioning": [
+        "80:40",
+        0
+      ],
+      "model": [
+        "80:42",
+        0
+      ]
+    }
+  },
+  "save": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "80:15",
+        0
+      ],
+      "filename_prefix": "ming-image"
+    }
+  }
+}

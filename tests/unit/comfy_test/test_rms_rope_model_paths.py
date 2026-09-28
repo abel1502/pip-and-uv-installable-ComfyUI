@@ -7,6 +7,7 @@ from torch import nn
 import comfy.ldm.joyimage.model as joyimage_model
 import comfy.ldm.lumina.model as lumina_model
 from comfy import ops
+from comfy.ldm.modules.attention import ComfyAttention, wrap_attn
 
 
 class _FixedProjection(nn.Module):
@@ -50,6 +51,7 @@ def _fake_uncast(calls):
     return uncast
 
 
+@wrap_attn
 def _fake_lumina_attention(query, _key, _value, _heads, _mask, **_kwargs):
     return query.movedim(1, 2).flatten(2)
 
@@ -63,6 +65,7 @@ def _make_lumina_attention(*, heads: int, kv_heads: int) -> lumina_model.JointAt
     attention.n_rep = heads // kv_heads
     attention.head_dim = 2
     attention.qk_norm = True
+    attention.comfy_attention = ComfyAttention()
     attention.qkv = _FixedProjection((heads + 2 * kv_heads) * attention.head_dim)
     attention.out = nn.Identity()
     attention.q_norm = _TrackingNorm(attention.head_dim)
@@ -170,7 +173,7 @@ def test_joyimage_fused_rms_rope_uses_relative_ops_import(monkeypatch):
     monkeypatch.setattr(
         joyimage_model,
         "optimized_attention",
-        lambda query, _key, _value, **_kwargs: query,
+        wrap_attn(lambda query, _key, _value, **_kwargs: query),
     )
 
     image, text = attention(

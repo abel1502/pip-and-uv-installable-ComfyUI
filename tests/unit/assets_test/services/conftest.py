@@ -69,7 +69,7 @@ def mock_create_session(db_engine):
             yield sess
 
     with patch("comfy.app.assets.services.ingest.create_session", _create_session), \
-         patch("app.database.db.WriteSession", sessionmaker(bind=db_engine)), \
+         patch("comfy.app.database.db.WriteSession", sessionmaker(bind=db_engine)), \
          patch("comfy.app.assets.services.asset_management.create_session", _create_session), \
          patch("comfy.app.assets.services.tagging.create_session", _create_session):
         yield _create_session

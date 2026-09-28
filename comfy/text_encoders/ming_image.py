@@ -5,12 +5,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tokenizers import Tokenizer
 
-import comfy.ops
-from comfy import sd1_clip
-from comfy.ldm.modules.attention import optimized_attention_for_device
-from comfy.text_encoders.llama import MLP, RMSNorm, TransformerBlock, moe_experts_forward, precompute_freqs_cis
-from comfy.text_encoders.qwen35 import apply_partial_rope
-from comfy.text_encoders import qwen_vl
+from .. import ops as comfy_ops
+from .. import sd1_clip
+from ..ldm.modules.attention import optimized_attention_for_device
+from .llama import MLP, RMSNorm, TransformerBlock, moe_experts_forward, precompute_freqs_cis
+from .qwen35 import apply_partial_rope
+from . import qwen_vl
 
 IMAGE_PATCH_TOKEN = 157157
 IMAGE_BLOCK = "<image><imagePatch></image>"
@@ -89,7 +89,7 @@ class BailingGate(nn.Module):
 
     def forward(self, x):
         scores = torch.sigmoid(self.proj(x.float()))
-        routing = scores + comfy.ops.cast_to_input(self.expert_bias, scores, copy=False)
+        routing = scores + comfy_ops.cast_to_input(self.expert_bias, scores, copy=False)
         num_tokens = routing.shape[0]
         grouped = routing.view(num_tokens, self.n_group, -1)
         group_idx = torch.topk(grouped.topk(2, dim=-1)[0].sum(dim=-1), k=self.topk_group, dim=-1, sorted=False)[1]
@@ -107,7 +107,7 @@ class BailingExperts(nn.Module):
         self.down_proj = ops.MoEExperts(num_experts=config.num_experts, in_features=config.moe_intermediate_size, out_features=config.hidden_size, bias=False, device=device, dtype=dtype)
 
     def forward(self, x, topk_idx, topk_weight):
-        return moe_experts_forward(x, topk_idx, topk_weight, self.num_experts, self.gate_up_proj, self.down_proj, comfy.ops._swiglu_eager)
+        return moe_experts_forward(x, topk_idx, topk_weight, self.num_experts, self.gate_up_proj, self.down_proj, comfy_ops._swiglu_eager)
 
 
 class BailingSparseMoe(nn.Module):
@@ -312,8 +312,8 @@ class MingImageTokenizer(sd1_clip.SD1Tokenizer):
 
 
 class MingImageClipModel(sd1_clip.SDClipModel):
-    def __init__(self, device="cpu", dtype=None, model_options={}):
-        super().__init__(device=device, layer="last", layer_idx=None, textmodel_json_config={}, dtype=dtype, special_tokens={"pad": 156892}, layer_norm_hidden_state=False, model_class=MingImageEncoder, enable_attention_masks=True, return_attention_masks=False, model_options=model_options)
+    def __init__(self, device="cpu", dtype=None, model_options={}, textmodel_json_config=None):
+        super().__init__(device=device, layer="last", layer_idx=None, textmodel_json_config=textmodel_json_config or {}, dtype=dtype, special_tokens={"pad": 156892}, layer_norm_hidden_state=False, model_class=MingImageEncoder, enable_attention_masks=True, return_attention_masks=False, model_options=model_options)
 
     def forward(self, tokens):
         if self.execution_device is None:
@@ -326,8 +326,8 @@ class MingImageClipModel(sd1_clip.SDClipModel):
 
 
 class MingImageTEModel(sd1_clip.SD1ClipModel):
-    def __init__(self, device="cpu", dtype=None, model_options={}):
-        super().__init__(device=device, dtype=dtype, name="ming_image", clip_model=MingImageClipModel, model_options=model_options)
+    def __init__(self, device="cpu", dtype=None, model_options={}, textmodel_json_config=None):
+        super().__init__(device=device, dtype=dtype, name="ming_image", clip_model=MingImageClipModel, model_options=model_options, textmodel_json_config=textmodel_json_config)
 
     def memory_estimation_function(self, tokens, device=None):
         # both expert banks of a MoE layer sit in fp32 while it runs, on top of the weights; images expand to a few hundred tokens each
@@ -339,11 +339,11 @@ class MingImageTEModel(sd1_clip.SD1ClipModel):
 
 def te(dtype_llama=None, llama_quantization_metadata=None):
     class MingImageTEModel_(MingImageTEModel):
-        def __init__(self, device="cpu", dtype=None, model_options={}):
+        def __init__(self, device="cpu", dtype=None, model_options={}, textmodel_json_config=None):
             if dtype_llama is not None:
                 dtype = dtype_llama
             model_options = model_options.copy()
             if "custom_operations" not in model_options:
-                model_options["custom_operations"] = comfy.ops.mixed_precision_ops(llama_quantization_metadata or {}, dtype, full_precision_mm=True)
-            super().__init__(device=device, dtype=dtype, model_options=model_options)
+                model_options["custom_operations"] = comfy_ops.mixed_precision_ops(llama_quantization_metadata or {}, dtype, full_precision_mm=True)
+            super().__init__(device=device, dtype=dtype, model_options=model_options, textmodel_json_config=textmodel_json_config)
     return MingImageTEModel_

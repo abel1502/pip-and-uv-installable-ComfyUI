@@ -1,4 +1,4 @@
-import os
+from importlib.resources import files
 import sqlite3
 
 import pytest
@@ -11,9 +11,9 @@ _REVISION_0008 = "0008_drop_asset_meta"
 
 
 def _make_config(db_path: str) -> Config:
-    root = os.path.join(os.path.dirname(__file__), "../..")
-    cfg = Config(os.path.abspath(os.path.join(root, "alembic.ini")))
-    cfg.set_main_option("script_location", os.path.abspath(os.path.join(root, "alembic_db")))
+    root = files("comfy")
+    cfg = Config(str(root.joinpath("alembic.ini")))
+    cfg.set_main_option("script_location", "comfy:alembic_db")
     cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
     return cfg
 

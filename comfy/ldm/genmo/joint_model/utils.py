@@ -4,7 +4,7 @@
 from typing import Optional
 
 import torch
-from comfy.ldm.modules.attention import AttentionTensorContainer, ComfyAttention, optimized_attention
+from ...modules.attention import AttentionTensorContainer, ComfyAttention, optimized_attention
 import torch.nn as nn
 import torch.nn.functional as F
 

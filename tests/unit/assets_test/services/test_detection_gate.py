@@ -216,8 +216,8 @@ def test_observation_is_skipped_when_the_row_changed_before_it_was_applied(
     _bump_mtime(path)
 
     with (
-        patch("folder_paths.get_input_directory", return_value=str(input_root)),
-        patch("app.assets.scanner.mode.hashing_enabled", return_value=False),
+        patch("comfy.cmd.folder_paths.get_input_directory", return_value=str(input_root)),
+        patch("comfy.app.assets.scanner.mode.hashing_enabled", return_value=False),
     ):
         observations, _ = observe_references_on_filesystem(session, [str(input_root)])
         assert len(observations) == 1
@@ -252,7 +252,7 @@ def test_drain_commits_each_entry_before_hashing_the_next(session, temp_dir: Pat
         in_transaction_while_hashing.append(session.connection().connection.driver_connection.in_transaction)
         return snapshot_hash(path)
 
-    monkeypatch.setattr("app.assets.scanner_changes.snapshot_hash", recording_snapshot_hash)
+    monkeypatch.setattr("comfy.app.assets.scanner_changes.snapshot_hash", recording_snapshot_hash)
 
     assert drain_pending_verifications(session) == 2
     assert in_transaction_while_hashing == [False]
@@ -267,7 +267,7 @@ def _retire_during_hash(monkeypatch, session, content_id: str, replace: bool) ->
             other.commit()
         return snapshot_hash(path)
 
-    monkeypatch.setattr("app.assets.scanner_changes.snapshot_hash", competing_write_then_hash)
+    monkeypatch.setattr("comfy.app.assets.scanner_changes.snapshot_hash", competing_write_then_hash)
 
 
 @pytest.mark.parametrize(
@@ -278,7 +278,7 @@ def _retire_during_hash(monkeypatch, session, content_id: str, replace: bool) ->
 def test_drain_skips_a_row_retired_while_hashing(
     session, temp_dir: Path, monkeypatch, replace: bool, seeded_hash: str | None
 ):
-    monkeypatch.setattr("folder_paths.get_input_directory", lambda: str(temp_dir))
+    monkeypatch.setattr("comfy.cmd.folder_paths.get_input_directory", lambda: str(temp_dir))
     path = temp_dir / "raced.bin"
     path.write_bytes(b"raced bytes")
     content, _ = _seed_content(session, path, seeded_hash)

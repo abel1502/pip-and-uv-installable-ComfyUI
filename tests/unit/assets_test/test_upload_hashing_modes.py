@@ -223,7 +223,7 @@ def test_output_not_hashed_in_on_mode(monkeypatch):
 
     monkeypatch.setattr(mode_module, "hashing_enabled", lambda: False)
     monkeypatch.setattr(
-        "comfy.app.assets.services.ingest.create_session", _fake_create_session
+        "comfy.app.assets.services.ingest.create_write_session", _fake_create_session
     )
 
     output_dir = folder_paths.get_output_directory()

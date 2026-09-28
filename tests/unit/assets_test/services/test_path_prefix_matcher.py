@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from app.assets.helpers import path_prefix_matcher
+from comfy.app.assets.helpers import path_prefix_matcher
 
 from .path_prefix_cases import anchor_case_paths, prefix_case_paths
 

@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 
 from ... import ops
+from ... import model_management
 from ...model_management import cast_to
 from ...patcher_extension import WrapperExecutor
 from ...patcher_extension import WrappersMP

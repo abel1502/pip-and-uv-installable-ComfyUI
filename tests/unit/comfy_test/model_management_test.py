@@ -1,6 +1,6 @@
 from unittest.mock import Mock, call
 
-import comfy.model_management as model_management
+from comfy import model_management
 
 
 class NPUDevice:

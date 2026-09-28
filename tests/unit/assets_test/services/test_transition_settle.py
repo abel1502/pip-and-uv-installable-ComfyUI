@@ -154,8 +154,8 @@ def test_enrich_phase_reaches_healthy_candidates_after_a_full_failed_batch(
         with SASession(db_engine) as sess:
             yield sess
 
-    monkeypatch.setattr("folder_paths.get_input_directory", lambda: str(temp_dir))
-    with patch("scanner.create_session", _create_session):
+    monkeypatch.setattr("comfy.cmd.folder_paths.get_input_directory", lambda: str(temp_dir))
+    with patch("comfy.app.assets.scanner.create_session", _create_session):
         ordered = scanner.get_unenriched_assets_for_roots(
             ("input",), compute_hashes=False, limit=101
         )
@@ -181,9 +181,9 @@ def test_enrich_phase_reaches_healthy_candidates_after_a_full_failed_batch(
     asset_seeder._cancel_event.clear()
 
     with (
-        patch("seeder_module.create_session", _create_session),
-        patch("scanner.create_session", _create_session),
-        patch("seeder_module.enrich_assets_batch", enrich_batch),
+        patch("comfy.app.assets.seeder.create_session", _create_session),
+        patch("comfy.app.assets.scanner.create_session", _create_session),
+        patch("comfy.app.assets.seeder.enrich_assets_batch", enrich_batch),
     ):
         cancelled, enriched = asset_seeder._run_enrich_phase(("input",))
 
@@ -224,7 +224,7 @@ def test_enrich_phase_reaches_healthy_candidates_after_four_failed_batches(
     )
     monkeypatch.setattr(seeder_module, "enrich_assets_batch", enrich_batch)
 
-    with patch("seeder_module.create_session", _create_session):
+    with patch("comfy.app.assets.seeder.create_session", _create_session):
         cancelled, enriched = asset_seeder._run_enrich_phase(("input",))
 
     assert cancelled is False
@@ -312,8 +312,8 @@ def test_enrich_phase_reoffers_rows_not_attempted_before_pause(
     monkeypatch.setattr(scanner, "enrich_asset", enrich_asset)
 
     with (
-        patch("seeder_module.create_session", _create_session),
-        patch("scanner.create_session", _create_session),
+        patch("comfy.app.assets.seeder.create_session", _create_session),
+        patch("comfy.app.assets.scanner.create_session", _create_session),
     ):
         worker = threading.Thread(target=run_enrich_phase, daemon=True)
         worker.start()

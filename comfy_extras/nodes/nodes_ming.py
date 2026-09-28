@@ -1,5 +1,5 @@
-import comfy.utils
-import node_helpers
+from comfy import utils
+from comfy import node_helpers
 from typing_extensions import override
 from comfy_api.latest import ComfyExtension, io
 
@@ -37,7 +37,7 @@ class TextEncodeMingImageEdit(io.ComfyNode):
         conditioning = clip.encode_from_tokens_scheduled(tokens)
         if vae is not None and len(images) > 0:
             height, width = images[0].shape[1:3]  # every reference frame shares the canvas of the first one, as the vendor processor does
-            ref_latents = [vae.encode(comfy.utils.common_upscale(image.movedim(-1, 1), width, height, "bilinear", "disabled").movedim(1, -1)) for image in images]
+            ref_latents = [vae.encode(utils.common_upscale(image.movedim(-1, 1), width, height, "bilinear", "disabled").movedim(1, -1)) for image in images]
             conditioning = node_helpers.conditioning_set_values(conditioning, {"reference_latents": ref_latents}, append=True)
         return io.NodeOutput(conditioning)
 

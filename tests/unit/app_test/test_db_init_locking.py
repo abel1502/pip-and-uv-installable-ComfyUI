@@ -162,7 +162,7 @@ def test_failed_restore_does_not_mask_the_upgrade_error(stale_db, monkeypatch, c
     monkeypatch.setattr(db_module, "_backup_database", _restore_explodes)
 
     with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError, match="upgrade exploded"):
-        db_module._init_file_db(db_module.get_database_url(), use_chain_hash=False)
+        db_module._init_file_db(f"sqlite:///{stale_db}", use_chain_hash=False)
 
     backup_path = stale_db + ".bkp"
     assert os.path.exists(backup_path)

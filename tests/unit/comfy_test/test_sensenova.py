@@ -7,8 +7,8 @@ from comfy.cli_args import args
 args.cpu = True
 
 from comfy import model_base, model_detection
-import comfy.latent_formats
-import comfy.sample
+from comfy import latent_formats
+from comfy import sample
 from comfy.nodes import base_nodes as nodes
 from comfy.ldm.sensenova import model as sensenova_model
 from comfy.ldm.sensenova.conditioning import (
@@ -287,10 +287,10 @@ def test_sensenova_reference_shape_estimate_uses_padded_image_sizes():
 def test_standard_empty_latent_adapts_to_sensenova_pixel_format():
     latent = nodes.EmptyLatentImage().generate(width=64, height=96, batch_size=2)[0]
     model = SimpleNamespace(
-        get_model_object=lambda name: comfy.latent_formats.HiDreamO1Pixel()
+        get_model_object=lambda name: latent_formats.HiDreamO1Pixel()
     )
 
-    samples = comfy.sample.fix_empty_latent_channels(
+    samples = sample.fix_empty_latent_channels(
         model,
         latent["samples"],
         latent["downscale_ratio_spacial"],

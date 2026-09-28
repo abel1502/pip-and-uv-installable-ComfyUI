@@ -1,17 +1,6 @@
 import pytest
-import torch
 
-from comfy.cli_args import args
-
-# Must precede the import: comfy.model_management picks its device at import time, and a CUDA
-# build with no driver raises there.
-_original_cpu = args.cpu
-if not torch.cuda.is_available():
-    args.cpu = True
-try:
-    import main
-finally:
-    args.cpu = _original_cpu
+from comfy.cmd import execution, main
 
 class LoopEscape(Exception):
     pass
@@ -61,17 +50,17 @@ class Executor:
         self.success = True
         self.status_messages = []
 
-    def execute(self, *args, **kwargs) -> None:
+    async def execute_async(self, *args, **kwargs) -> None:
         return None
 
 
 class ExecuteFailureExecutor(Executor):
-    def execute(self, *args, **kwargs) -> None:
+    async def execute_async(self, *args, **kwargs) -> None:
         raise RuntimeError("forced execute failure")
 
 
 def test_prompt_worker_resumes_background_scan_when_execute_raises(monkeypatch) -> None:
-    monkeypatch.setattr(main.execution, "PromptExecutor", ExecuteFailureExecutor)
+    monkeypatch.setattr(execution, "PromptExecutor", ExecuteFailureExecutor)
     asset_manager = AssetManager()
 
     with pytest.raises(RuntimeError, match="^forced execute failure$"):
@@ -81,7 +70,7 @@ def test_prompt_worker_resumes_background_scan_when_execute_raises(monkeypatch) 
 
 
 def test_prompt_worker_resumes_background_scan_when_completion_raises(monkeypatch) -> None:
-    monkeypatch.setattr(main.execution, "PromptExecutor", Executor)
+    monkeypatch.setattr(execution, "PromptExecutor", Executor)
     asset_manager = AssetManager()
 
     with pytest.raises(RuntimeError, match="^forced completion failure$"):
@@ -95,7 +84,7 @@ def test_prompt_worker_resumes_background_scan_when_completion_raises(monkeypatc
 
 
 def test_prompt_worker_preserves_execute_error_when_resume_raises(monkeypatch) -> None:
-    monkeypatch.setattr(main.execution, "PromptExecutor", ExecuteFailureExecutor)
+    monkeypatch.setattr(execution, "PromptExecutor", ExecuteFailureExecutor)
     asset_manager = AssetManager(resume_error=RuntimeError("forced resume failure"))
 
     with pytest.raises(RuntimeError, match="^forced execute failure$"):
@@ -105,7 +94,7 @@ def test_prompt_worker_preserves_execute_error_when_resume_raises(monkeypatch) -
 
 
 def test_prompt_worker_resumes_scan_when_later_iteration_raises_before_gc(monkeypatch) -> None:
-    monkeypatch.setattr(main.execution, "PromptExecutor", Executor)
+    monkeypatch.setattr(execution, "PromptExecutor", Executor)
     clock = iter((1.0, 2.0, 2.0))
     monkeypatch.setattr(main.time, "perf_counter", lambda: next(clock))
     asset_manager = AssetManager()

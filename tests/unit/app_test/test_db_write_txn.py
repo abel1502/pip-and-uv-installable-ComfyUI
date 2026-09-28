@@ -3,17 +3,17 @@ import sqlite3
 import pytest
 from sqlalchemy import text
 
-from app.database import db as db_module
+from comfy.app.database import db as db_module
 
 
 @pytest.fixture
 def file_db(tmp_path, monkeypatch):
     db_path = str(tmp_path / "comfyui.db")
-    monkeypatch.setattr(db_module.args, "database_url", f"sqlite:///{db_path}")
+    monkeypatch.setattr(db_module.current_execution_context().configuration, "database_url", f"sqlite:///{db_path}")
     monkeypatch.setattr(db_module, "Session", None)
     monkeypatch.setattr(db_module, "WriteSession", None)
     monkeypatch.setattr(db_module, "_db_lock", None)
-    db_module._init_file_db(db_module.args.database_url)
+    db_module._init_file_db(db_module.get_database_url(), use_chain_hash=False)
     yield db_path
     db_module.Session.kw["bind"].dispose()
     db_module.WriteSession.kw["bind"].dispose()

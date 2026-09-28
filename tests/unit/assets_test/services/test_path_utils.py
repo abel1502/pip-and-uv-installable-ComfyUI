@@ -644,7 +644,7 @@ class TestCachedPrefixMatchers:
         moved.mkdir()
         new = moved / "new.png"
 
-        with patch("app.assets.services.path_utils.folder_paths") as mock_fp:
+        with patch("comfy.app.assets.services.path_utils.folder_paths") as mock_fp:
             mock_fp.get_input_directory.return_value = str(fake_dirs["input"])
             mock_fp.get_output_directory.return_value = str(moved)
             mock_fp.get_temp_directory.return_value = str(fake_dirs["temp"])

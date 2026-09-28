@@ -1,5 +1,6 @@
 import builtins
 import importlib.util
+from importlib.resources import files
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -16,7 +17,7 @@ def test_snapshot_hash_defers_and_chains_blake3_import_failure(tmp_path: Path) -
             raise blake3_import_error
         return real_import(name, globals, locals, fromlist, level)
 
-    module_path = Path(__file__).parents[3] / "app/assets/services/snapshot_hash.py"
+    module_path = files("comfy.app.assets.services").joinpath("snapshot_hash.py")
     spec = importlib.util.spec_from_file_location(
         "isolated_snapshot_hash_import_guard", module_path
     )

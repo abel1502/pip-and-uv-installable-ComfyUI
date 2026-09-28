@@ -126,7 +126,7 @@ def test_create_from_hash_reads_the_file_before_the_claim_transaction(
     digest = "e" * 64
     path = temp_dir / "claimed.bin"
     path.write_bytes(b"claimed bytes")
-    monkeypatch.setattr("app.assets.mode.hashing_enabled", lambda: True)
+    monkeypatch.setattr("comfy.app.assets.mode.hashing_enabled", lambda: True)
     _seed_live_content(mock_create_session, path, digest)
     sessions = []
 

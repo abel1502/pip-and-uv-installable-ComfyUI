@@ -115,7 +115,7 @@ def test_stat_error_drops_entry_and_allows_other_watch_entries_to_commit(
             raise PermissionError(path)
         return real_os.stat(path)
 
-    monkeypatch.setattr("folder_paths.get_input_directory", lambda: str(temp_dir))
+    monkeypatch.setattr("comfy.cmd.folder_paths.get_input_directory", lambda: str(temp_dir))
     monkeypatch.setattr(scanner_admission, "os", SimpleNamespace(stat=_stat))
     monkeypatch.setattr("comfy.app.database.db.WriteSession", sessionmaker(bind=db_engine))
 
@@ -152,7 +152,7 @@ def test_seed_failure_does_not_stop_watch_list_drain(
         batches.append([spec["abs_path"] for spec in specs])
         return 1, RuntimeError("forced watch seed failure")
 
-    monkeypatch.setattr("folder_paths.get_input_directory", lambda: str(temp_dir))
+    monkeypatch.setattr("comfy.cmd.folder_paths.get_input_directory", lambda: str(temp_dir))
     monkeypatch.setattr("comfy.app.assets.scanner.insert_asset_specs", insert_with_one_failure)
 
     with caplog.at_level(logging.INFO):
@@ -200,7 +200,7 @@ def test_spec_construction_failure_drops_the_entry_without_wedging_the_watch_lis
             )
         return resolve_name_and_tags(path)
 
-    monkeypatch.setattr("folder_paths.get_input_directory", lambda: str(temp_dir))
+    monkeypatch.setattr("comfy.cmd.folder_paths.get_input_directory", lambda: str(temp_dir))
     monkeypatch.setattr(
         scanner_admission, "get_name_and_tags_from_asset_path", _name_and_tags
     )
@@ -239,7 +239,7 @@ def test_unexpected_fault_mid_drain_leaves_unvisited_entries_on_the_watch_list(
             raise MemoryError("forced unrecoverable fault")
         return real_os.stat(path)
 
-    monkeypatch.setattr("folder_paths.get_input_directory", lambda: str(temp_dir))
+    monkeypatch.setattr("comfy.cmd.folder_paths.get_input_directory", lambda: str(temp_dir))
     monkeypatch.setattr(scanner_admission, "os", SimpleNamespace(stat=stat_or_explode))
 
     with pytest.raises(MemoryError, match="^forced unrecoverable fault$"):
@@ -332,9 +332,9 @@ def test_settled_entries_are_seeded_in_one_write_session_batch(temp_dir: Path):
     _WATCH_LIST[:] = [_WatchEntry(str(path), path.stat()) for path in settled]
     _WATCH_LIST.append(_WatchEntry(str(moving), (temp_dir / "first.bin").stat()))
     with (
-        patch("scanner_admission.compute_loader_path", side_effect=os.path.basename),
+        patch("comfy.app.assets.scanner_admission.compute_loader_path", side_effect=os.path.basename),
         patch(
-            "scanner_admission.get_name_and_tags_from_asset_path",
+            "comfy.app.assets.scanner_admission.get_name_and_tags_from_asset_path",
             side_effect=lambda path: (os.path.basename(path), []),
         ),
         patch("comfy.app.assets.scanner.insert_asset_specs", return_value=(0, None)) as insert_asset_specs,
