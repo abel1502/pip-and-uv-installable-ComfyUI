@@ -3,9 +3,12 @@ import logging
 from importlib.metadata import entry_points
 from importlib.resources import files
 
+import torch
+
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
+from comfy.cmd import folder_paths
 from comfy.cmd.node_info import node_info
 from comfy.execution_context import context_add_custom_nodes
 from comfy.nodes.package import _extract_vanilla_custom_node_roots, _import_and_enumerate_nodes_in_module
@@ -25,6 +28,7 @@ def test_installed_custom_node_registration(caplog):
     }
     assert expected <= {canonicalize_name(name) for name in installed}, 'Required custom-node packages are missing'
 
+    folder_paths.create_directories()
     prepare_vanilla_environment()
     packages = {}
     all_nodes = ExportedNodes()
@@ -60,3 +64,12 @@ def test_installed_custom_node_registration(caplog):
     assert {'ACN_ControlNetLoaderAdvanced', 'ACN_AdvancedControlNetApply_v2'} <= packages['comfyui-advanced-controlnet'].NODE_CLASS_MAPPINGS.keys()
     if 'comfyui-nunchaku' in packages:
         assert {'NunchakuPulidApply', 'NunchakuPulidLoader', 'NunchakuPuLIDLoaderV2', 'NunchakuFluxPuLIDApplyV2'} <= packages['comfyui-nunchaku'].NODE_CLASS_MAPPINGS.keys()
+
+    if 'PixelOE' in all_nodes.NODE_CLASS_MAPPINGS:
+        result = all_nodes.NODE_CLASS_MAPPINGS['PixelOE']().execute(
+            pixel_size=4, thickness=2, img=torch.rand(1, 63, 63, 3), mode='contrast',
+            color_quant=False, no_post_upscale=False, num_colors=16,
+            quant_mode='kmeans', dither_mode='none', device='cpu',
+        )
+        assert len(result) == 3 and result[0].shape == (1, 64, 64, 3)
+        assert all(torch.isfinite(image).all() for image in result)

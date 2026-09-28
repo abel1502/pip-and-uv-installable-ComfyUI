@@ -64,12 +64,20 @@ class StreamToLogger:
     def __init__(self, logger: logging.Logger, log_level=logging.INFO):
         self.logger = logger
         self.log_level = log_level
+        self.original_stdout = sys.stdout
+        self._writing = False
 
     def write(self, buf):
-        # Process each line from the buffer. Print statements usually end with a newline.
-        for line in buf.rstrip().splitlines():
-            # Log the line, removing any trailing whitespace
-            self.logger.log(self.log_level, line.rstrip())
+        # A custom node may bind its own logging handler to this stream.
+        if self._writing:
+            self.original_stdout.write(buf)
+            return
+        self._writing = True
+        try:
+            for line in buf.rstrip().splitlines():
+                self.logger.log(self.log_level, line.rstrip())
+        finally:
+            self._writing = False
 
     def flush(self):
         # The logger handles its own flushing, so this can be a no-op.
