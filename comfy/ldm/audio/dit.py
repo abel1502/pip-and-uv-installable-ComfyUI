@@ -1,16 +1,18 @@
 # code adapted from: https://github.com/Stability-AI/stable-audio-tools
 
 import math
+from ..modules.attention import AttentionTensorContainer
+from ..modules.attention import ComfyAttention
 import typing as tp
 
-import torch
 from einops import rearrange
 from torch import nn
 from torch.nn import functional as F
+import torch
 
-from ..modules.attention import optimized_attention
 from ... import ops
 from ... import rmsnorm
+from ..modules.attention import optimized_attention
 from .embedders import ExpoFourierFeatures
 
 
@@ -292,6 +294,7 @@ class Attention(nn.Module):
         operations=None,
     ):
         super().__init__()
+        self.comfy_attention = ComfyAttention()
         self.dim = dim
         self.dim_heads = dim_heads
         self.causal = causal
@@ -438,11 +441,14 @@ class Attention(nn.Module):
         if self.differential:
             q, q_diff = q.unbind(dim=1)
             k, k_diff = k.unbind(dim=1)
-            out      = optimized_attention(q,      k,      v, h, skip_reshape=True, low_precision_attention=False, transformer_options=transformer_options, **gqa_kwargs)
-            out_diff = optimized_attention(q_diff, k_diff, v, h, skip_reshape=True, low_precision_attention=False, transformer_options=transformer_options, **gqa_kwargs)
+            q, k = AttentionTensorContainer(q), AttentionTensorContainer(k)
+            out      = optimized_attention(q,      k,      AttentionTensorContainer(v), h, skip_reshape=True, low_precision_attention=False, preferred_attention=self.comfy_attention, transformer_options=transformer_options, **gqa_kwargs)
+            q_diff, k_diff, v = AttentionTensorContainer(q_diff), AttentionTensorContainer(k_diff), AttentionTensorContainer(v)
+            out_diff = optimized_attention(q_diff, k_diff, v, h, skip_reshape=True, low_precision_attention=False, preferred_attention=self.comfy_attention, transformer_options=transformer_options, **gqa_kwargs)
             out = out - out_diff
         else:
-            out = optimized_attention(q, k, v, h, skip_reshape=True, low_precision_attention=False, transformer_options=transformer_options, **gqa_kwargs)
+            q, k, v = AttentionTensorContainer(q), AttentionTensorContainer(k), AttentionTensorContainer(v)
+            out = optimized_attention(q, k, v, h, skip_reshape=True, low_precision_attention=False, preferred_attention=self.comfy_attention, transformer_options=transformer_options, **gqa_kwargs)
 
         out = self.to_out(out)
 

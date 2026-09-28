@@ -1,3 +1,4 @@
+from contextlib import closing
 from filelock import FileLock
 from filelock import Timeout
 from importlib import resources
@@ -6,10 +7,13 @@ import hashlib
 import logging
 import os
 import shutil
+import sqlite3
+import time
 
 from ...execution_context import current_execution_context
 
 Session = None
+WriteSession = None
 
 from alembic import command
 from alembic.config import Config
@@ -20,10 +24,11 @@ from sqlalchemy import event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from ..assets.database import models as _asset_models  # noqa: F401 -- register asset tables
+from sqlalchemy.exc import OperationalError
+from ..assets.database import models as _asset_models
 from .models import Base
 
-import blake3  # noqa: F401
+import blake3
 
 _DB_AVAILABLE = True
 
@@ -97,6 +102,19 @@ def copy_legacy_default_db(db_path: str) -> None:
     if os.path.exists(backup_path):
         return
 
+    if os.path.exists(legacy_db_path + "-wal"):
+        # Fold committed WAL pages back into the file before it is renamed and copied.
+        try:
+            with closing(sqlite3.connect(legacy_db_path)) as legacy:
+                busy, _, _ = legacy.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        except sqlite3.Error:
+            busy = 1
+        if busy:
+            logger.warning(
+                f"Not relocating legacy database '{legacy_db_path}': its WAL could not be "
+                f"checkpointed, so it may still be in use."
+            )
+            return
     os.replace(legacy_db_path, backup_path)
     shutil.copy(backup_path, db_path)
     logger.info(
@@ -111,7 +129,26 @@ def prepare_file_db_path(db_path: str) -> None:
     db_dir = os.path.dirname(db_path)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
-    copy_legacy_default_db(db_path)
+
+
+_BACKUP_TIMEOUT_SECONDS = 5.0
+_SQLITE_BUSY, _SQLITE_LOCKED = 5, 6  # sqlite3 only exports these names from Python 3.11
+
+
+def _backup_database(source_path, destination_path):
+    # A plain file copy misses committed pages still in the WAL file.
+    # sqlite3's backup() retries a locked database forever, so bound it: another
+    # client holding the destination must not hang startup.
+    deadline = time.monotonic() + _BACKUP_TIMEOUT_SECONDS
+
+    def give_up_when_locked_too_long(status, remaining, total):
+        if status in (_SQLITE_BUSY, _SQLITE_LOCKED) and time.monotonic() > deadline:
+            raise TimeoutError(f"'{destination_path}' stayed locked; database backup abandoned")
+
+    with closing(sqlite3.connect(source_path)) as source:
+        with closing(sqlite3.connect(destination_path)) as destination:
+            source.backup(destination, progress=give_up_when_locked_too_long)
+    shutil.copymode(source_path, destination_path)
 
 
 _db_lock = None
@@ -166,8 +203,9 @@ def _init_memory_db(db_url):
 
     Base.metadata.create_all(engine)
 
-    global Session
+    global Session, WriteSession
     Session = sessionmaker(bind=engine)
+    WriteSession = Session
 
 
 def _compute_chain_hash(script: ScriptDirectory) -> str:
@@ -252,6 +290,7 @@ def _init_file_db(db_url, use_chain_hash: bool = True):
         _init_memory_db("sqlite:///:memory:")
         return
     try:
+        copy_legacy_default_db(original_path)
         _migrate_and_bind(db_url, db_path, config, script, target_rev, source_spec)
     except Exception:
         _db_lock.release()
@@ -274,12 +313,13 @@ def _migrate_and_bind(db_url, db_path, config, script, target_rev, source_spec):
         source = _find_best_source_db(*source_spec, script, db_path)
         if source:
             logger.info("Snapshotting database from '%s' to '%s'", source, db_path)
-            shutil.copy(source, db_path)
+            _backup_database(source, db_path)
             db_exists = True
 
     config.set_main_option("sqlalchemy.url", db_url)
 
     engine = create_engine(db_url)
+    write_engine = create_engine(db_url)
 
     @event.listens_for(engine, "connect")
     def set_sqlite_pragma(dbapi_connection, connection_record):
@@ -287,7 +327,30 @@ def _migrate_and_bind(db_url, db_path, config, script, target_rev, source_spec):
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
 
+    # Writes go through a separate engine whose transactions take the write lock up front.
+    # pysqlite otherwise defers BEGIN until the first INSERT/UPDATE/DELETE, so a transaction
+    # that reads first can fail to upgrade to a write lock without waiting on busy_timeout.
+    # Following SQLAlchemy's pysqlite recipe, the driver's own transaction handling is
+    # switched off so the only BEGIN issued is the BEGIN IMMEDIATE below.
+    @event.listens_for(write_engine, "connect")
+    def configure_write_connection(dbapi_connection, connection_record):
+        dbapi_connection.isolation_level = None
+        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+
+    @event.listens_for(write_engine, "begin")
+    def begin_immediate(connection):
+        connection.exec_driver_sql("BEGIN IMMEDIATE")
+
     conn = engine.connect()
+
+    try:
+        journal_mode = conn.exec_driver_sql("PRAGMA journal_mode=WAL").scalar_one()
+    except OperationalError:
+        logger.warning("Could not enable SQLite WAL mode; continuing with the default journal mode.")
+    else:
+        if journal_mode.lower() != "wal":
+            logger.warning("SQLite WAL mode unavailable; continuing with %s journal mode.", journal_mode)
+
     context = MigrationContext.configure(conn)
     current_rev = context.get_current_revision()
 
@@ -296,7 +359,7 @@ def _migrate_and_bind(db_url, db_path, config, script, target_rev, source_spec):
     elif current_rev != target_rev:
         backup_path = db_path + ".bkp"
         if db_exists:
-            shutil.copy(db_path, backup_path)
+            _backup_database(db_path, backup_path)
         else:
             backup_path = None
 
@@ -304,10 +367,17 @@ def _migrate_and_bind(db_url, db_path, config, script, target_rev, source_spec):
             command.upgrade(config, target_rev)
             logger.info(f"Database upgraded from {current_rev} to {target_rev}")
         except Exception as e:
-            if backup_path:
-                shutil.copy(backup_path, db_path)
-                os.remove(backup_path)
             logger.exception("Error upgrading database: ")
+            if backup_path:
+                # Restore the database from backup if upgrade fails
+                try:
+                    _backup_database(backup_path, db_path)
+                    os.remove(backup_path)
+                except Exception:
+                    logger.exception(
+                        f"Restoring the database from its pre-upgrade backup, or removing the "
+                        f"backup afterwards, failed; the pre-upgrade copy is kept at {backup_path}"
+                    )
             raise e
 
         if backup_path and _upgrade_discards_the_catalog(script, target_rev, current_rev):
@@ -315,14 +385,26 @@ def _migrate_and_bind(db_url, db_path, config, script, target_rev, source_spec):
                 f"The asset catalog was rebuilt from scratch by migration "
                 f"{_DESTRUCTIVE_REVISION}: manual tags, user metadata, previews, renames, "
                 f"API-created records and job_id links from the previous database were "
-                f"discarded. The database from before the upgrade was kept at {backup_path}."
+                f"discarded. Record deletions were also discarded, so files still on disk "
+                f"will be catalogued again. The database from before the upgrade was kept "
+                f"at {backup_path}."
             )
 
     conn.close()
 
-    global Session
+    global Session, WriteSession
     Session = sessionmaker(bind=engine)
+    WriteSession = sessionmaker(bind=write_engine)
 
 
 def create_session():
     return Session()
+
+
+def create_write_session():
+    """A session whose transactions open with BEGIN IMMEDIATE. Do filesystem work before
+    using it: the write lock is held from the first statement until commit. Do not open
+    one inside another: the inner one waits out busy_timeout for the outer's lock, then
+    fails with "database is locked", indistinguishable from real contention. Rule out a
+    nested session before investigating lock contention."""
+    return WriteSession()

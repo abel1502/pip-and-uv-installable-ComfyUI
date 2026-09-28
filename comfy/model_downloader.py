@@ -821,6 +821,8 @@ KNOWN_DIFF_CONTROLNETS: Final[KnownDownloadables] = KnownDownloadables([
 ], folder_name="diff_controlnet")
 
 KNOWN_APPROX_VAES: Final[KnownDownloadables] = KnownDownloadables([
+    UrlFile("https://raw.githubusercontent.com/madebyollin/taesd/main/taeqi2_1_encoder.pth", show_in_ui=False),
+    UrlFile("https://raw.githubusercontent.com/madebyollin/taesd/main/taeqi2_1_decoder.pth", show_in_ui=False),
     HuggingFile("madebyollin/taesd", "taesd_decoder.safetensors", show_in_ui=False),
     HuggingFile("madebyollin/taesd", "taesd_encoder.safetensors", show_in_ui=False),
     HuggingFile("madebyollin/taesdxl", "taesdxl_decoder.safetensors", show_in_ui=False),

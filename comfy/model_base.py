@@ -86,10 +86,10 @@ from .ldm.pixart.pixartms import PixArtMS
 from .ldm.pixeldit.model import PixDiT_T2I
 from .ldm.pixeldit.pid import PidNet
 from .ldm.qwen_image.model import QwenImageTransformer2DModel
+from .ldm.qwen_image21 import model as qwen_image21_model
 from .ldm.rt_detr.rtdetr_v4 import RTv4
 from .ldm.sam3.detector import SAM3Model
 from .ldm.seedvr.model import NaDiT
-from .ldm.qwen_image21 import model as qwen_image21_model
 from .ldm.sensenova import conditioning as sensenova_conditioning
 from .ldm.sensenova import model as sensenova_model
 from .ldm.sensenova.sampling import SenseNovaModelSampling
@@ -1753,6 +1753,16 @@ class Lumina2(BaseModel):
             out['ref_latents'] = list([1, 16, sum(map(lambda a: math.prod(a.size()[2:]), ref_latents))])
         return out
 
+class MingImage(Lumina2):
+    def extra_conds(self, **kwargs):
+        ref_latents = kwargs.pop("reference_latents", None)
+        out = super().extra_conds(**kwargs)
+        direct_context = kwargs.get("direct_context", None)
+        if direct_context is not None:
+            out['direct_context'] = CONDRegular(direct_context)
+        if ref_latents is not None:
+            out['ref_frames'] = conds.CONDList([self.process_latent_in(lat)[:, :, f] for lat in ref_latents for f in range(lat.shape[2])])
+        return out
 
 class ZImagePixelSpace(Lumina2):
     def __init__(self, model_config, model_type=ModelType.FLOW, device=None):

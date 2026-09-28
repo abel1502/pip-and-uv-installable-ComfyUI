@@ -1,30 +1,29 @@
 # original code from https://github.com/genmoai/models under apache 2.0 license
 # adapted to ComfyUI
-from typing import Tuple, List, Dict, Optional
+from typing import Dict
+from typing import List
+from typing import Optional
+from typing import Tuple
 
+from einops import rearrange
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange
+from ...modules.attention import AttentionTensorContainer
+from ...modules.attention import ComfyAttention
 
-from .layers import (
-    FeedForward,
-    PatchEmbed,
-    TimestepEmbedder,
-)
-from .rope_mixed import (
-    compute_mixed_rotation,
-    create_position_matrix,
-)
-from .temporal_rope import apply_rotary_emb_qk_real
-from .utils import (
-    AttentionPool,
-    modulate,
-)
 from ...common_dit import rms_norm
+from .layers import FeedForward
+from .layers import PatchEmbed
+from .layers import TimestepEmbedder
+from .rope_mixed import compute_mixed_rotation
+from .rope_mixed import create_position_matrix
+from .temporal_rope import apply_rotary_emb_qk_real
+from .utils import AttentionPool
+from .utils import modulate
 # from flash_attn import flash_attn_varlen_qkvpacked_func
-from ...modules.attention import optimized_attention
 from .... import ops
+from ...modules.attention import optimized_attention
 
 
 def modulated_rmsnorm(x, scale, eps=1e-6):
@@ -66,6 +65,7 @@ class AsymmetricAttention(nn.Module):
             operations=None,
     ):
         super().__init__()
+        self.comfy_attention = ComfyAttention()
         self.dim_x = dim_x
         self.dim_y = dim_y
         self.num_heads = num_heads
@@ -140,13 +140,16 @@ class AsymmetricAttention(nn.Module):
         k = torch.cat([k_x, k_y[:, :crop_y]], dim=1).transpose(1, 2)
         v = torch.cat([v_x, v_y[:, :crop_y]], dim=1).transpose(1, 2)
 
+        seq_x, seq_y = q_x.shape[1], q_y.shape[1]
+        del q_x, k_x, v_x, q_y, k_y, v_y
+        q, k, v = AttentionTensorContainer(q), AttentionTensorContainer(k), AttentionTensorContainer(v)
         xy = optimized_attention(q,
                                  k,
-                                 v, self.num_heads, skip_reshape=True, transformer_options=transformer_options)
+                                 v, self.num_heads, skip_reshape=True, preferred_attention=self.comfy_attention, transformer_options=transformer_options)
 
-        x, y = torch.tensor_split(xy, (q_x.shape[1],), dim=1)
+        x, y = torch.tensor_split(xy, (seq_x,), dim=1)
         x = self.proj_x(x)
-        o = torch.zeros(y.shape[0], q_y.shape[1], y.shape[-1], device=y.device, dtype=y.dtype)
+        o = torch.zeros(y.shape[0], seq_y, y.shape[-1], device=y.device, dtype=y.dtype)
         o[:, :y.shape[1]] = y
 
         y = self.proj_y(o)

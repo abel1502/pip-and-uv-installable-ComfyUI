@@ -12,14 +12,18 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import comfy.model_management
-import comfy.ops
-import comfy.patcher_extension
-import comfy.quant_ops
-from comfy.ldm.lumina.model import FeedForward
-from comfy.ldm.modules.attention import optimized_attention_masked
-from comfy.tensor_parallel.operations import column_parallel_linear, local_size, row_parallel_linear
-from comfy.text_encoders.llama import precompute_freqs_cis
+from ... import model_management
+from ... import ops
+from ... import patcher_extension
+from ... import quant_ops
+from ...tensor_parallel.operations import column_parallel_linear
+from ...tensor_parallel.operations import local_size
+from ...tensor_parallel.operations import row_parallel_linear
+from ...text_encoders.llama import precompute_freqs_cis
+from ..lumina.model import FeedForward
+from ..modules.attention import AttentionTensorContainer
+from ..modules.attention import ComfyAttention
+from ..modules.attention import optimized_attention_masked
 
 # Per-token role indicators
 SEQUENCE_PADDING_INDICATOR = -1
@@ -48,6 +52,7 @@ def _apply_rope_split_half1(x, freqs_cis):
 class Ideogram4Attention(nn.Module):
     def __init__(self, hidden_size, num_heads, eps=1e-5, dtype=None, device=None, operations=None):
         super().__init__()
+        self.comfy_attention = ComfyAttention()
         self.num_heads = local_size(operations, num_heads, "Ideogram 4 attention heads")
         self.head_dim = hidden_size // num_heads
         self.hidden_size = hidden_size
@@ -67,24 +72,25 @@ class Ideogram4Attention(nn.Module):
         qkv = self.qkv(x).view(batch_size, seq_len, 3, self.num_heads, self.head_dim)
         q, k, v = qkv.unbind(dim=2)
 
-        if comfy.model_management.in_training:
+        if model_management.in_training:
             q = _apply_rope_split_half1(self.norm_q(q), freqs_cis)
             k = _apply_rope_split_half1(self.norm_k(k), freqs_cis)
         else:
-            q_scale, _, q_offload_stream = comfy.ops.cast_bias_weight(self.norm_q, q, offloadable=True)
-            k_scale, _, k_offload_stream = comfy.ops.cast_bias_weight(self.norm_k, k, offloadable=True)
-            q, k = comfy.quant_ops.ck.rms_rope_split_half(
+            q_scale, _, q_offload_stream = ops.cast_bias_weight(self.norm_q, q, offloadable=True)
+            k_scale, _, k_offload_stream = ops.cast_bias_weight(self.norm_k, k, offloadable=True)
+            q, k = quant_ops.ck.rms_rope_split_half(
                 q, k, freqs_cis, q_scale, k_scale, self.norm_q.eps
             )
-            comfy.ops.uncast_bias_weight(self.norm_q, q_scale, None, q_offload_stream)
-            comfy.ops.uncast_bias_weight(self.norm_k, k_scale, None, k_offload_stream)
+            ops.uncast_bias_weight(self.norm_q, q_scale, None, q_offload_stream)
+            ops.uncast_bias_weight(self.norm_k, k_scale, None, k_offload_stream)
 
         # (B, heads, L, head_dim)
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
+        q = AttentionTensorContainer(q.transpose(1, 2))
+        k = AttentionTensorContainer(k.transpose(1, 2))
+        v = AttentionTensorContainer(v.transpose(1, 2))
+        del qkv
 
-        out = optimized_attention_masked(q, k, v, self.num_heads, attn_mask, skip_reshape=True, transformer_options=transformer_options)
+        out = optimized_attention_masked(q, k, v, self.num_heads, attn_mask, skip_reshape=True, preferred_attention=self.comfy_attention, transformer_options=transformer_options)
         return self.o(out)
 
 
@@ -312,10 +318,10 @@ class Ideogram4Transformer2DModel(Ideogram4Transformer):
         return self._tokens_to_img(out, gh, gw)
 
     def forward(self, x, timesteps, context=None, attention_mask=None, transformer_options={}, **kwargs):
-        return comfy.patcher_extension.WrapperExecutor.new_class_executor(
+        return patcher_extension.WrapperExecutor.new_class_executor(
             self._forward,
             self,
-            comfy.patcher_extension.get_all_wrappers(comfy.patcher_extension.WrappersMP.DIFFUSION_MODEL, transformer_options),
+            patcher_extension.get_all_wrappers(patcher_extension.WrappersMP.DIFFUSION_MODEL, transformer_options),
         ).execute(x, timesteps, context, attention_mask, transformer_options, **kwargs)
 
     def _forward(self, x, timesteps, context=None, attention_mask=None, transformer_options={}, **kwargs):
