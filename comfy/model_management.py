@@ -875,15 +875,27 @@ def should_free_pins_for_ram_pressure(shortfall):
         logging.warning("Could not read Windows swap usage; falling back to RAM-pressure pin eviction: %s", err)
         return True
 
+def pin_budget_shortfall(size):
+    """Bytes by which committing ``size`` more host memory would cut into the
+    pin reserve; zero or less means it fits.
+
+    Available memory is MemAvailable capped by every limited cgroup's
+    ``limit - working set`` (see ``system_memory``), so memory held by other
+    processes, VMs, and the rest of this container is always accounted for.
+    """
+    headroom = max(pinned_memory_reserve(), memory_management.RAM_CACHE_HEADROOM // 2)
+    return size + headroom - system_memory.virtual_memory_available()
+
+
 def ensure_pin_budget(size, evict_active=False, loaded=False):
-    if args.high_ram:
-        return True
-    shortfall = size + max(memory_management.RAM_CACHE_HEADROOM / 2, 2048 * 1024 ** 2) - system_memory.virtual_memory_available()
+    """Whether ``size`` more bytes of host memory may be pinned (or otherwise
+    held, e.g. a host activation cache) right now, evicting this process's
+    idle pins first if that makes room. Measured at call time, never cached."""
+    shortfall = pin_budget_shortfall(size)
     if shortfall <= 0:
         return True
-
-    to_free = shortfall + PIN_PRESSURE_HYSTERESIS
-    return free_pins(to_free, evict_active=evict_active, loaded=loaded) >= shortfall
+    free_pins(shortfall + PIN_PRESSURE_HYSTERESIS, evict_active=evict_active, loaded=loaded)
+    return pin_budget_shortfall(size) <= 0
 
 def free_registrations(shortfall, evict_active=True):
     if MAX_PINNED_MEMORY <= 0:
@@ -2066,32 +2078,55 @@ PINNED_MEMORY = {}
 TOTAL_PINNED_MEMORY = 0
 MAX_PINNED_MEMORY = -1
 
-def get_disk_swap_total():
-    if not os.path.exists("/proc/swaps"):
-        return 0
+# Pinned pages cannot be reclaimed or swapped, and CUDA host registrations do
+# not appear in the kernel's Mlocked/VmPin counters, so nothing but this budget
+# keeps pinning from starving the host (or the container) into a livelock or an
+# OOM kill. The reserve is the part of the effective memory limit pinning never
+# takes: max(4 GiB, 10% of the limit). Those are the constants upstream ComfyUI
+# already reserved (its min(0.9 * ram, ram - 4 GiB) ceiling); here they are
+# applied to the cgroup-aware limit and, at every pin, to memory available now,
+# rather than to total host RAM. The reserve has to hold the file-backed
+# working set of everything else (executables, the desktop, the page cache of
+# the model files being streamed), which MemAvailable counts as available, and
+# whatever other processes allocate after a pin is made.
+PINNED_MEMORY_RESERVE_MIN = 4 * 1024 ** 3
+PINNED_MEMORY_RESERVE_FRACTION = 10
+WINDOWS_PINNED_MEMORY_FRACTION = 0.40  # the Windows driver limit is apparently 50%
 
-    total = 0
-    try:
-        with open("/proc/swaps", encoding="utf-8") as swaps:
-            next(swaps, None)
-            for line in swaps:
-                filename, _, size, _, _ = line.rsplit(maxsplit=4)
-                if os.path.basename(os.path.realpath(filename)).startswith("zram"):
-                    continue
-                total += int(size) * 1024
-    except:
-        logging.warning("Could not get amount of swap memory on system.")
-    return total
+
+def pinned_memory_reserve() -> int:
+    """Bytes of the effective memory limit that pinning always leaves free."""
+    if args.pinned_memory_reserve is not None:
+        return max(0, int(args.pinned_memory_reserve * 1024 ** 3))
+    return max(PINNED_MEMORY_RESERVE_MIN, system_memory.virtual_memory_total() // PINNED_MEMORY_RESERVE_FRACTION)
+
+
+def compute_max_pinned_memory() -> int:
+    """Ceiling on bytes registered at once: the effective memory limit (host
+    RAM, or the lowest cgroup memory.max / memory.high / memory.limit_in_bytes
+    of this process's cgroup and its ancestors) minus the reserve.
+
+    This bounds the total; each pin is additionally checked against memory
+    available at that moment by ``ensure_pin_budget``."""
+    limit = system_memory.virtual_memory_total()
+    ceiling = limit - pinned_memory_reserve()
+    if WINDOWS:
+        ceiling = min(ceiling, int(limit * WINDOWS_PINNED_MEMORY_FRACTION))
+    if args.max_pinned_memory is not None:
+        ceiling = min(ceiling, int(args.max_pinned_memory * 1024 ** 3))
+    return max(0, ceiling)
+
 
 if not args.disable_pinned_memory:
     if is_nvidia() or is_amd():
-        ram = get_total_memory(torch.device("cpu"))
-        if WINDOWS:
-            MAX_PINNED_MEMORY = ram * 0.40  # Windows limit is apparently 50%
-        else:
-            swap = 0 if system_memory.cgroup_memory_limit() is not None else get_disk_swap_total()
-            MAX_PINNED_MEMORY = max(ram * 0.40, min(ram * 0.90, ram - 4 * 1024 ** 3, ram + swap - 16 * 1024 ** 3))
-        logger.info("Enabled pinned memory {}".format(MAX_PINNED_MEMORY // (1024 * 1024)))
+        MAX_PINNED_MEMORY = compute_max_pinned_memory()
+        logger.info(
+            "Enabled pinned memory: ceiling %d MB of %d MB effective memory limit, reserve %d MB, %d MB available now",
+            MAX_PINNED_MEMORY // (1024 * 1024),
+            system_memory.virtual_memory_total() // (1024 * 1024),
+            pinned_memory_reserve() // (1024 * 1024),
+            system_memory.virtual_memory_available() // (1024 * 1024),
+        )
 
 PINNING_ALLOWED_TYPES = set(["Tensor", "Parameter", "QuantizedTensor"])
 
@@ -2152,6 +2187,8 @@ def pin_memory(tensor, evict_active=True):
 
     size = tensor.nbytes
     memory_management.extra_ram_release(memory_management.RAM_CACHE_HEADROOM)
+    if not ensure_pin_budget(size, evict_active=evict_active):
+        return False
     if not ensure_pin_registerable(size, evict_active=evict_active):
         return False
 

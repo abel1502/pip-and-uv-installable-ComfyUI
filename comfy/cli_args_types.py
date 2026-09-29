@@ -216,6 +216,8 @@ class Configuration(dict):
         output (Optional[str]): Override the output directory for workflows run via --workflows.
         guess_settings (bool): Auto-detect best settings for this machine (GPU type, RAM, attention backend, etc.). Explicit flags override guessed values.
         disable_pinned_memory (bool): Disable pinned memory use.
+        pinned_memory_reserve (Optional[float]): GB of the effective memory limit (host RAM, or the cgroup limit in a container) that pinned memory always leaves free, checked against memory available at each pin. Defaults to the larger of 4 GB and 10% of the limit.
+        max_pinned_memory (Optional[float]): Cap in GB on pinned host memory. Defaults to, and never exceeds, the effective memory limit minus pinned_memory_reserve.
         fp8_e8m0fnu_unet (bool): Store unet weights in fp8_e8m0fnu.
         fp8_storage (bool): Preserve native fp8 checkpoint weights as resident fp8 storage when supported.
         bf16_text_enc (bool): Store text encoder weights in bf16.
@@ -406,6 +408,8 @@ class Configuration(dict):
         self.disable_manager_ui: bool = False
         self.enable_manager_legacy_ui: bool = False
         self.disable_pinned_memory: bool = False
+        self.pinned_memory_reserve: Optional[float] = None
+        self.max_pinned_memory: Optional[float] = None
 
         self.fp8_e8m0fnu_unet: bool = False
         self.bf16_text_enc: bool = False

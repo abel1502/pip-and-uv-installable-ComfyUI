@@ -186,6 +186,8 @@ parser.add_argument("--fast", nargs="*", type=PerformanceFeature, help="Enable s
 parser.add_argument("--debug-hang", action="store_true", help="Enable stack trace dumps on Ctrl-C for debugging hangs.")
 
 parser.add_argument("--disable-pinned-memory", action="store_true", help="Disable pinned memory use.")
+parser.add_argument("--pinned-memory-reserve", type=float, default=None, help="GB of the effective memory limit (host RAM, or the cgroup limit in a container) that pinned memory always leaves free, checked against memory available at each pin. Default: the larger of 4 GB and 10%% of the limit.")
+parser.add_argument("--max-pinned-memory", type=float, default=None, help="Cap in GB on pinned host memory. Default and upper bound: the effective memory limit minus --pinned-memory-reserve.")
 
 parser.add_argument("--mmap-torch-files", action="store_true", help="Use mmap for ckpt/pt files.")
 parser.add_argument("--disable-mmap", action="store_true", help="Don't use mmap for safetensors.")

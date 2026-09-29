@@ -51,6 +51,8 @@ MODEL_MANAGEMENT_ARGS: frozenset[str] = frozenset({
     "high_ram",
     "disable_smart_memory",
     "disable_pinned_memory",
+    "pinned_memory_reserve",
+    "max_pinned_memory",
     "async_offload",
     "disable_async_offload",
     "force_non_blocking",
