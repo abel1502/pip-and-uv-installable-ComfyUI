@@ -139,6 +139,7 @@ def host(tmp_path, monkeypatch):
     write(tmp_path / "proc_self_cgroup", "0::/\n")
     monkeypatch.setattr(system_memory, "_cgroup_dirs", None)
     monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(model_management, "WINDOWS", False)
     monkeypatch.setattr(system_memory.psutil, "virtual_memory", fake.virtual_memory)
 
     cudart = FakeCudart()
