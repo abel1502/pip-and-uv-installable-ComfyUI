@@ -7,8 +7,7 @@ import pytest
 from comfy import storage
 
 
-def test_fast_nvme_link_thresholds(tmp_path, monkeypatch):
-    sysfs = FakeSysfs(tmp_path, monkeypatch)
+def test_fast_nvme_link_thresholds(sysfs):
     cases = [
         ("8.0 GT/s PCIe", "4", True),
         ("16.0 GT/s PCIe", "4", True),

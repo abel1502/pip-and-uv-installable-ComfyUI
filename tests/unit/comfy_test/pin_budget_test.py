@@ -14,6 +14,7 @@ The memory sources are injected: a fake cgroupfs tree, a fake
 ``/proc/self/cgroup`` and a fake ``psutil.virtual_memory`` whose
 ``available`` is what /proc/meminfo MemAvailable would report.
 """
+import os
 import sys
 from types import SimpleNamespace
 
@@ -116,6 +117,10 @@ class FakeHostBuffer:
 def sparse_tensor(tmp_path):
     """A file-backed, never-touched CPU tensor large enough to slice every pin
     from, so pinning tens of GiB costs neither RAM nor commit charge."""
+    if os.name == "nt":
+        # NTFS files are not sparse unless flagged, so this would allocate
+        # every byte on disk
+        pytest.skip("needs a filesystem that creates sparse files by default")
     path = tmp_path / "sparse.bin"
     size = MAX_CHUNKS * CHUNK
     with open(path, "wb") as f:
@@ -124,7 +129,7 @@ def sparse_tensor(tmp_path):
 
 
 @pytest.fixture
-def host(tmp_path, monkeypatch, sparse_tensor):
+def host(tmp_path, monkeypatch):
     cgroupfs = tmp_path / "sys_fs_cgroup"
     cgroupfs.mkdir()
     fake = FakeHost(cgroupfs)
@@ -138,7 +143,6 @@ def host(tmp_path, monkeypatch, sparse_tensor):
 
     cudart = FakeCudart()
     monkeypatch.setattr(torch.cuda, "cudart", lambda: cudart)
-    monkeypatch.setattr(pinned_memory.comfy_aimdo.torch, "hostbuf_to_tensor", lambda hostbuf: sparse_tensor)
     monkeypatch.setattr(model_management, "PINNED_MEMORY", {})
     monkeypatch.setattr(model_management, "TOTAL_PINNED_MEMORY", 0)
     # the ceiling the unfixed code computed on appmana-001; the live budget
@@ -147,7 +151,6 @@ def host(tmp_path, monkeypatch, sparse_tensor):
     monkeypatch.setattr(model_management, "current_loaded_models", [])
     monkeypatch.setattr(memory_management, "extra_ram_release_callback", None)
     monkeypatch.setattr(memory_management, "RAM_CACHE_HEADROOM", 0)
-    fake.sparse = sparse_tensor
     fake.cudart = cudart
     with context_configuration(default_configuration()):
         yield fake
@@ -249,6 +252,11 @@ class TestReserveAndCeiling:
 
 
 class TestPinTimeBudget:
+    @pytest.fixture(autouse=True)
+    def pinnable(self, host, sparse_tensor, monkeypatch):
+        monkeypatch.setattr(pinned_memory.comfy_aimdo.torch, "hostbuf_to_tensor", lambda hostbuf: sparse_tensor)
+        host.sparse = sparse_tensor
+
     @pytest.mark.parametrize("pin", PIN_PATHS)
     def test_memory_used_by_other_processes_is_respected(self, host, pin):
         host.other = VMS
