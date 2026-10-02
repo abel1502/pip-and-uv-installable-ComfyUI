@@ -7,18 +7,27 @@
 """
 import base64
 import json
+import math
 
 import numpy as np
 import pytest
 import torch
 
 import comfy.model_base
+import comfy.model_management
 import comfy.model_sampling
+import comfy.ops
 import comfy.sample
 import comfy.samplers
+import comfy.sd
 import comfy.supported_models
 from comfy import sd1_clip
+from comfy.ldm.ideogram4.model import Ideogram4Transformer2DModel
+from comfy.nodes.base_nodes import ConditioningZeroOut
 from comfy.text_encoders import flux, llama
+from comfy_extras.nodes.nodes_custom_sampler import (CFGOverride, DualModelGuider, KSamplerSelect, RandomNoise,
+                                                     SamplerCustomAdvanced)
+from comfy_extras.nodes.nodes_ideogram4 import Ideogram4Scheduler
 
 # Qwen/Qwen-Image-2.1 scheduler/scheduler_config.json at d26bb61231c3, verbatim
 QWEN_IMAGE21_SCHEDULER_CONFIG = {
@@ -170,3 +179,120 @@ def test_flux2_text_encoder_without_padding_is_unchanged():
         expected = reference(input_ids=torch.tensor([ids]), output_hidden_states=True).hidden_states
     for i, layer in enumerate((1, 2)):
         torch.testing.assert_close(out[:, i], expected[layer], rtol=1e-5, atol=1e-5)
+
+
+# ideogram4 scheduler.LogitNormalSchedule, get_schedule_for_resolution and make_step_intervals, verbatim
+def _official_ideogram4_schedule(width, height, mu, std):
+    mean = mu + 0.5 * math.log((height * width) / (512 * 512))
+
+    def schedule(t):
+        t = t.to(torch.float64)
+        z = torch.special.ndtri(t)
+        y = mean + std * z
+        t_ = torch.special.expit(y)
+        t_ = 1 - t_
+        t_min = 1.0 / (1 + math.exp(0.5 * 18.0))
+        t_max = 1.0 / (1 + math.exp(0.5 * -15.0))
+        return t_.clamp(t_min, t_max).to(torch.float32)
+
+    return schedule
+
+
+def _official_ideogram4_sigmas(width, height, steps, mu, std):
+    # pipeline_ideogram4.__call__: for i in range(num_steps - 1, -1, -1): t = schedule(step_intervals[i + 1]),
+    # s = schedule(step_intervals[i]); the reference time runs 0 (noise) to 1 (clean), sigma = 1 - t
+    schedule = _official_ideogram4_schedule(width, height, mu, std)
+    step_intervals = torch.linspace(0.0, 1.0, steps + 1, dtype=torch.float32)
+    return torch.stack([1 - schedule(step_intervals[i:i + 1])[0] for i in range(steps, -1, -1)])
+
+
+def test_ideogram4_scheduler_defaults_to_the_v4_quality_48_preset():
+    # docs/inference.md: "V4_QUALITY_48 is the default"; sampler_configs.py: num_steps=48, mu=0.0, std=1.5
+    defaults = {i.id: i.default for i in Ideogram4Scheduler.define_schema().inputs}
+    assert (defaults["steps"], defaults["mu"], defaults["std"]) == (48, 0.0, 1.5)
+
+
+@pytest.mark.parametrize("width,height", [(512, 512), (1024, 1024), (2048, 2048), (256, 416), (1600, 400), (64, 64)])
+@pytest.mark.parametrize("steps,mu,std", [(48, 0.0, 1.5), (20, 0.0, 1.75), (12, 0.5, 1.75)])
+def test_ideogram4_sigmas_are_the_official_loop(width, height, steps, mu, std):
+    sigmas = Ideogram4Scheduler.execute(steps, width, height, mu, std).args[0]
+    torch.testing.assert_close(sigmas, _official_ideogram4_sigmas(width, height, steps, mu, std), rtol=0, atol=0)
+    assert sigmas[-1].item() == pytest.approx(1 / (1 + math.exp(7.5)), abs=1e-7)  # the loop stops at 1 - t_max, not 0
+
+
+TINY_IDEOGRAM4 = {"num_attention_heads": 2, "attention_head_dim": 32, "intermediate_size": 128, "adaln_dim": 32,
+                  "llm_features_dim": 24, "rope_theta": 5000000, "mrope_section": [4, 2, 2], "norm_eps": 1e-5}
+
+
+@pytest.fixture
+def tiny_ideogram4(monkeypatch):
+    monkeypatch.setattr(comfy.supported_models.Ideogram4, "unet_extra_config", dict(TINY_IDEOGRAM4))
+    models = []
+    for seed in (0, 1):
+        torch.manual_seed(seed)
+        model = Ideogram4Transformer2DModel(in_channels=128, num_layers=2, operations=comfy.ops.disable_weight_init, **TINY_IDEOGRAM4)
+        state_dict = {k: (torch.randn_like(v) * 0.05).float() for k, v in model.state_dict().items()}
+        models.append(comfy.sd.load_diffusion_model_state_dict(state_dict, model_options={"dtype": torch.float32}))
+    return models
+
+
+def test_ideogram4_cfg_override_last_steps_is_the_polish_schedule():
+    # sampler_configs.py: guidance_schedule=(3.0,) * 3 + (7.0,) * 45 in loop-index order, index 0 being the last step
+    sigmas = Ideogram4Scheduler.execute(48, 1024, 1024, 0.0, 1.5).args[0]
+
+    class Guider:
+        cfg = 7.0
+
+    class Executor:
+        class_obj = Guider()
+
+        def __call__(self, *args, **kwargs):
+            return self.class_obj.cfg
+
+    class Model:
+        model_options = {}
+
+        def get_model_object(self, name):
+            return comfy.model_sampling.ModelSamplingDiscreteFlow()
+
+        def clone(self):
+            return self
+
+        def add_wrapper(self, wrapper_type, wrapper):
+            self.wrapper = wrapper
+
+    model = CFGOverride.execute(Model(), 3.0, 0.0, 1.0, last_steps=3).args[0]
+    model_options = {"transformer_options": {"sample_sigmas": sigmas}}
+    used = [model.wrapper(Executor(), torch.zeros(1), sigma.reshape(1), model_options, 0) for sigma in sigmas[:-1]]
+    assert used == list(reversed((3.0,) * 3 + (7.0,) * 45))
+
+
+@pytest.mark.parametrize("negative", ["zero_out", "unconnected"])
+def test_ideogram4_samples_the_official_loop(tiny_ideogram4, negative):
+    """The native graph (Ideogram4Scheduler, CFGOverride on the last 3 steps, DualModelGuider with the unconditional
+    model, SamplerCustomAdvanced, euler) against pipeline_ideogram4's loop on the same models: z starts as the noise
+    itself, each step uses the preset's guidance, the unconditional pass is image-only, and the result is z where the
+    loop stops, undivided."""
+    cond, uncond = tiny_ideogram4
+    width = height = 64
+    steps, mu, std = 48, 0.0, 1.5
+    positive = [[torch.randn(1, 5, 24, generator=torch.Generator().manual_seed(1)), {}]]
+    neg = ConditioningZeroOut().zero_out(positive)[0] if negative == "zero_out" else None
+    sigmas = Ideogram4Scheduler.execute(steps, width, height, mu, std).args[0]
+    model = CFGOverride.execute(cond, 3.0, 0.0, 1.0, last_steps=3).args[0]
+    guider = DualModelGuider.execute(model, positive, 7.0, model_negative=uncond, negative=neg).args[0]
+    latent = {"samples": torch.zeros(1, 128, height // 16, width // 16)}
+    out = SamplerCustomAdvanced.execute(RandomNoise.execute(7).args[0], guider, KSamplerSelect.execute("euler").args[0], sigmas, latent).args[0]
+
+    comfy.model_management.load_models_gpu([cond, uncond], force_full_load=True)
+    device = cond.load_device
+    z = comfy.sample.prepare_noise(latent["samples"], 7).to(device)
+    context = positive[0][0].to(device)
+    guidance = list(reversed((3.0,) * 3 + (7.0,) * 45))
+    for j in range(steps):
+        t = sigmas[j:j + 1].to(device)
+        with torch.no_grad():
+            pos_v = -cond.model.diffusion_model(z, t, context=context)
+            neg_v = -uncond.model.diffusion_model(z, t)
+        z = z + (guidance[j] * pos_v + (1 - guidance[j]) * neg_v) * (sigmas[j] - sigmas[j + 1]).item()
+    torch.testing.assert_close(out["samples"], cond.model.process_latent_out(z.cpu()), rtol=1e-5, atol=1e-6)

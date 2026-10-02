@@ -92,6 +92,7 @@ from .ldm.sam3.detector import SAM3Model
 from .ldm.seedvr.model import NaDiT
 from .ldm.sensenova import conditioning as sensenova_conditioning
 from .ldm.sensenova import model as sensenova_model
+from .ldm.ideogram4.sampling import ModelSamplingIdeogram4
 from .ldm.sensenova.sampling import SenseNovaModelSampling
 from .ldm.sensenova.sampling import time_snr_shift
 from .ldm.trellis2.model import Trellis2 as Trellis2Model
@@ -2959,16 +2960,20 @@ class JoyImage(BaseModel):
 class Ideogram4(BaseModel):
     def __init__(self, model_config, model_type=ModelType.FLOW, device=None):
         super().__init__(model_config, model_type, device=device, unet_model=Ideogram4Transformer2DModel)
+        self.model_sampling = ModelSamplingIdeogram4(model_config)
 
     def extra_conds(self, **kwargs):
         out = super().extra_conds(**kwargs)
+        cross_attn = kwargs.get("cross_attn", None)
+        # pipeline_ideogram4's unconditional pass is image-only; zeroed-out text conditioning is that pass
+        if cross_attn is None or torch.count_nonzero(cross_attn) == 0:
+            out.pop('c_crossattn', None)
+            return out
         attention_mask = kwargs.get("attention_mask", None)
         if attention_mask is not None:
             if torch.numel(attention_mask) != attention_mask.sum():
                 out['attention_mask'] = conds.CONDRegular(attention_mask)
-        cross_attn = kwargs.get("cross_attn", None)
-        if cross_attn is not None:
-            out['c_crossattn'] = conds.CONDRegular(cross_attn)
+        out['c_crossattn'] = conds.CONDRegular(cross_attn)
         return out
 
 class Krea2(BaseModel):
