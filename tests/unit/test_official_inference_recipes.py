@@ -338,3 +338,60 @@ def test_ideogram4_vae_decodes_the_reference_latent():
     vae_in = (out * bn_std + bn_mean).view(2, 32, 2, 2, gh, gw).permute(0, 1, 4, 2, 5, 3).reshape(2, 32, gh * 2, gw * 2)
     torch.testing.assert_close(vae_in, reference, rtol=1e-6, atol=1e-6)
     torch.testing.assert_close(latent_format.process_in(out), z, rtol=1e-5, atol=1e-5)
+
+
+def _tiny_qwen3vl_text(num_layers=36):
+    from transformers import Qwen3VLTextConfig, Qwen3VLTextModel
+    torch.manual_seed(0)
+    config = Qwen3VLTextConfig(vocab_size=151936, hidden_size=256, intermediate_size=128, num_hidden_layers=num_layers,
+                               num_attention_heads=2, num_key_value_heads=1, head_dim=128, rms_norm_eps=1e-6,
+                               rope_parameters={"rope_type": "default", "rope_theta": 5000000.0,
+                                                "mrope_section": [24, 20, 20], "mrope_interleaved": True},
+                               attn_implementation="sdpa")
+    model = Qwen3VLTextModel(config).eval()
+    for parameter in model.parameters():
+        parameter.data.normal_(0, 0.05)
+    comfy_config = {"vocab_size": 151936, "hidden_size": 256, "intermediate_size": 128, "num_hidden_layers": num_layers,
+                    "num_attention_heads": 2, "num_key_value_heads": 1}
+    return model, comfy_config
+
+
+def _official_ideogram4_text_features(language_model, token_ids):
+    """pipeline_ideogram4._get_qwen3_vl_embeddings and _encode_text for one unpadded prompt: each tap is the
+    output of decoder layer i for i in QWEN3_VL_ACTIVATION_LAYERS = (0, 3, ..., 33, 35)."""
+    from transformers.masking_utils import create_causal_mask
+    with torch.no_grad():
+        inputs_embeds = language_model.embed_tokens(token_ids)
+        pos_2d = torch.arange(token_ids.shape[1]).unsqueeze(0)
+        position_ids_4d = pos_2d[None, ...].expand(4, pos_2d.shape[0], -1)
+        causal_mask = create_causal_mask(config=language_model.config, inputs_embeds=inputs_embeds,
+                                         attention_mask=torch.ones_like(token_ids), past_key_values=None,
+                                         position_ids=position_ids_4d[0])
+        position_embeddings = language_model.rotary_emb(inputs_embeds, position_ids_4d[1:])
+        captured = {}
+        hidden_states = inputs_embeds
+        for layer_idx, decoder_layer in enumerate(language_model.layers):
+            hidden_states = decoder_layer(hidden_states, attention_mask=causal_mask, position_ids=position_ids_4d[0],
+                                          past_key_values=None, position_embeddings=position_embeddings)
+            if layer_idx in (0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 35):
+                captured[layer_idx] = hidden_states
+    stacked = torch.stack([captured[i] for i in sorted(captured)], dim=0).permute(1, 2, 3, 0)
+    return stacked.reshape(token_ids.shape[0], token_ids.shape[1], -1)
+
+
+@pytest.mark.parametrize("encoder", ["qwen3vl", "text_only"])
+def test_ideogram4_text_features_are_the_reference_taps(encoder, monkeypatch):
+    from comfy.text_encoders import ideogram4, qwen3vl
+    reference, config = _tiny_qwen3vl_text()
+    if encoder == "qwen3vl":
+        monkeypatch.setitem(qwen3vl.QWEN3VL_VISION, "qwen3vl_8b", dict(hidden_size=32, intermediate_size=32, depth=1, deepstack_visual_indexes=[0]))
+        te = ideogram4.Ideogram4Qwen3VLTEModel(dtype=torch.float32, textmodel_json_config=config)
+        tokenizer = ideogram4.Ideogram4Qwen3VLTokenizer()
+    else:
+        te = ideogram4.Ideogram4TEModel(dtype=torch.float32, model_options={"qwen3vl_8b_model_config": config})
+        tokenizer = ideogram4.Ideogram4Tokenizer()
+    te.qwen3vl_8b.transformer.model.load_state_dict(reference.state_dict(), strict=False)
+    tokens = tokenizer.tokenize_with_weights('{"high_level_description": "a red fox in the snow"}')
+    ids = torch.tensor([[t[0] for t in tokens["qwen3vl_8b"][0]]])
+    out, _, _ = te.encode_token_weights(tokens)
+    torch.testing.assert_close(out, _official_ideogram4_text_features(reference, ids), rtol=1e-5, atol=1e-5)

@@ -1086,10 +1086,16 @@ class Llama2_(nn.Module):
             malloc_scope="block"
         )
 
+        # a listed tap of the last layer is its raw output unless normed intermediates were asked for; "all" ends
+        # with the normed state, as transformers' hidden_states does
+        raw_last_tap = only_layers is not None and (i + 1) in only_layers and not final_layer_norm_intermediate
+        if raw_last_tap:
+            all_intermediate.append(x.unsqueeze(1).clone())
+
         if self.norm is not None:
             x = self.norm(x)
 
-        if all_intermediate is not None:
+        if all_intermediate is not None and not raw_last_tap:
             if only_layers is None or ((i + 1) in only_layers):
                 all_intermediate.append(x.unsqueeze(1).clone())
 
