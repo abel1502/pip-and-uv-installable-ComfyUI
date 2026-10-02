@@ -101,21 +101,28 @@ class MistralTokenizerClass:
 
 
 class Mistral3Tokenizer(sd1_clip.SDTokenizer):
-    def __init__(self, embedding_directory=None, embedding_size=5120, embedding_key='mistral3_24b', tokenizer_data=None):
+    def __init__(self, embedding_directory=None, embedding_size=5120, embedding_key='mistral3_24b', tokenizer_data=None, min_length=1):
         if tokenizer_data is None:
             tokenizer_data = {}
         self.tekken_data = tokenizer_data.get("tekken_model", None)
-        super().__init__("", pad_with_end=False, embedding_directory=embedding_directory, embedding_size=embedding_size, embedding_key=embedding_key, tokenizer_class=MistralTokenizerClass, has_end_token=False, pad_to_max_length=False, pad_token=11, start_token=1, max_length=99999999, min_length=1, pad_left=True, disable_weights=True, tokenizer_args=load_mistral_tokenizer(self.tekken_data), tokenizer_data=tokenizer_data)
+        super().__init__("", pad_with_end=False, embedding_directory=embedding_directory, embedding_size=embedding_size, embedding_key=embedding_key, tokenizer_class=MistralTokenizerClass, has_end_token=False, pad_to_max_length=False, pad_token=11, start_token=1, max_length=99999999, min_length=min_length, pad_left=True, disable_weights=True, tokenizer_args=load_mistral_tokenizer(self.tekken_data), tokenizer_data=tokenizer_data)
 
     def state_dict(self):
         return {"tekken_model": self.tekken_data}
+
+
+class Flux2Mistral3Tokenizer(Mistral3Tokenizer):
+    def __init__(self, embedding_directory=None, tokenizer_data=None):
+        # black-forest-labs/flux2 text_encoder.py: apply_chat_template(..., padding="max_length", max_length=512), which the
+        # Mistral-Small-3.1 processor pads on the left with <pad>
+        super().__init__(embedding_directory=embedding_directory, tokenizer_data=tokenizer_data, min_length=512)
 
 
 class Flux2Tokenizer(sd1_clip.SD1Tokenizer):
     def __init__(self, embedding_directory=None, tokenizer_data=None):
         if tokenizer_data is None:
             tokenizer_data = {}
-        super().__init__(embedding_directory=embedding_directory, tokenizer_data=tokenizer_data, name="mistral3_24b", tokenizer=Mistral3Tokenizer)
+        super().__init__(embedding_directory=embedding_directory, tokenizer_data=tokenizer_data, name="mistral3_24b", tokenizer=Flux2Mistral3Tokenizer)
         self.llama_template = '[SYSTEM_PROMPT]You are an AI that reasons about image descriptions. You give structured responses focusing on object relationships, object\nattribution and actions without speculation.[/SYSTEM_PROMPT][INST]{}[/INST]'
 
     def tokenize_with_weights(self, text, return_word_ids=False, llama_template=None, **kwargs):
@@ -142,7 +149,7 @@ class Mistral3_24BModel(sd1_clip.SDClipModel):
             if num_layers < 40:
                 textmodel_json_config["final_norm"] = False
         from . import llama
-        super().__init__(device=device, layer=layer, layer_idx=layer_idx, textmodel_json_config=textmodel_json_config, dtype=dtype, special_tokens={"start": 1, "pad": 0}, layer_norm_hidden_state=False, model_class=llama.Mistral3Small24B, enable_attention_masks=attention_mask, return_attention_masks=attention_mask, model_options=model_options)
+        super().__init__(device=device, layer=layer, layer_idx=layer_idx, textmodel_json_config=textmodel_json_config, dtype=dtype, special_tokens={"start": 1, "pad": 11}, layer_norm_hidden_state=False, model_class=llama.Mistral3Small24B, enable_attention_masks=attention_mask, return_attention_masks=attention_mask, model_options=model_options)
 
 
 class Flux2TEModel(sd1_clip.SD1ClipModel):

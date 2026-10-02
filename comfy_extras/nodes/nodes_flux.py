@@ -221,7 +221,8 @@ class Flux2Scheduler(io.ComfyNode):
             node_id="Flux2Scheduler",
             category="model/sampling/schedulers",
             inputs=[
-                io.Int.Input("steps", default=20, min=1, max=4096),
+                # black-forest-labs/flux2 util.py: flux.2-dev "defaults": {"guidance": 4.0, "num_steps": 50}
+                io.Int.Input("steps", default=50, min=1, max=4096),
                 io.Int.Input("width", default=1024, min=16, max=MAX_RESOLUTION, step=1),
                 io.Int.Input("height", default=1024, min=16, max=MAX_RESOLUTION, step=1),
             ],
