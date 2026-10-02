@@ -23,6 +23,10 @@ environment-install commands into a ComfyUI environment: use the repository's
 - [Ideogram 4 model card](ideogram4_comfy_org_model_card.md) ([source](https://huggingface.co/Comfy-Org/Ideogram-4))
 - [Ideogram 4 Comfy workflow template](ideogram4_comfy_workflow_template.json) ([source](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/image_ideogram4_t2i.json))
 - [Ideogram 4 prompting guide](ideogram4_prompting.md) ([source](https://github.com/ideogram-oss/ideogram4/blob/main/docs/prompting.md))
+- [Ideogram 4.0 JSON prompting, Ideogram docs](ideogram4_docs_json_prompting.md) ([source](https://docs.ideogram.ai/using-ideogram/getting-started/prompting-guide/4.-json-prompting-ideogram-4.0))
+- [How to JSON prompt for Ideogram 4.0, Ideogram blog](ideogram4_blog_json_prompting.md) ([source](https://ideogram.ai/blog/ideogram-4-json-prompting/))
+- [Ideogram 4 magic-prompt system prompt v1](ideogram4_magic_prompt_system_prompt_v1.md) ([source](https://github.com/ideogram-oss/ideogram4/blob/main/src/ideogram4/magic_prompt_system_prompts/v1.txt))
+- [Ideogram 4.5 API](ideogram4_5_api.md) ([source](https://developer.ideogram.ai/api-reference/images/generate/ideogram-4-5); API-only, no open weights yet)
 
 ## Alibaba
 - [Wan text-to-video/image-to-video prompt guide](alibaba_wan_video_prompting.md) ([source](https://www.alibabacloud.com/help/en/model-studio/text-to-video-prompt))

@@ -1,8 +1,8 @@
 # Ideogram 4 prompting guide
 
-Vendored snapshot from: https://github.com/ideogram-oss/ideogram4/blob/main/docs/prompting.md
+Vendored snapshot from: https://github.com/ideogram-oss/ideogram4/blob/main/docs/prompting.md (commit 990fe1c, 2026-06-30)
 
-Fetched: 2026-06-03
+Fetched: 2026-10-02
 
 Sampler presets (`sampler_configs.py`): `V4_QUALITY_48`, the default, is 48 steps, mu 0, std 1.5,
 guidance 7 with the last 3 steps at 3; `V4_DEFAULT_20` is 20 steps, mu 0, std 1.75, last 2 at 3;
@@ -18,35 +18,19 @@ the reference endpoints, and the template's `ConditioningZeroOut` negative runs 
 
 # Prompting Guide
 
-Ideogram 4 is trained exclusively on **structured JSON captions** (represented as string type). While the
-model can accept plain-text prompts, providing a JSON object that follows the
-caption schema gives significantly better results, especially for
+Ideogram 4 is trained exclusively on **structured JSON captions** (represented as string type).
+Providing a JSON object that follows the caption schema is required for good results, and allows
 controllability, spatial layout, and style fidelity.
 
 ## Plain-text vs. JSON prompts
 
-You can pass in plain-text prompts directly to the model and it will work. The
-sampling parameters come from a named preset in `ideogram4.PRESETS` (the same
+Passing in plain-text prompts directly to the model will not work and will likely
+trigger a safety warning. Plain-text prompts should be run through a [magic prompt](#magic-prompt)
+to turn them into a JSON prompt.
+
+The sampling parameters come from a named preset in `ideogram4.PRESETS` (the same
 ones `run_inference.py` exposes via `--sampler-preset`), unpacked into the
 `pipe()` call:
-
-```python
-from ideogram4 import PRESETS
-
-preset = PRESETS["V4_QUALITY_48"]
-images = pipe(
-  "a golden retriever on a skateboard",
-  height=1024,
-  width=1024,
-  num_steps=preset.num_steps,
-  guidance_schedule=preset.guidance_schedule,
-  mu=preset.mu,
-  std=preset.std,
-)
-```
-
-
-But for higher quality image generations and more control, pass a JSON string as the prompt:
 
 ```python
 import json
@@ -119,8 +103,7 @@ The package ships three configurations, registered by name in
 
 `ideogram-4-v1` is the default and is **free**. It runs the expansion
 server-side, so there is no local model or system prompt involved — it just needs
-an Ideogram API key (get one at
-[developer.ideogram.ai](https://developer.ideogram.ai)). The `claude-*`
+an Ideogram API key (get one at [ideogram.ai/platform](https://ideogram.ai/platform)). The `claude-*`
 configurations instead send one of our open-source system prompt to an OpenRouter model;
 select one with `--magic-prompt-model` and export `MAGIC_PROMPT_API_KEY`:
 
@@ -151,13 +134,10 @@ construct the caption with any system prompt and LLM of your choosing.
 
 ## JSON caption schema
 
-> **Note:** Following this schema is **not required** — the model accepts any
-> string as a prompt. The schema below describes the exact structure the model
-> was trained on, and matching it minimizes train/eval mismatch so the model
-> generates closer to its full quality. Treat the "required" / "must" language
-> in the rest of this section as the format the [`CaptionVerifier`](../src/ideogram4/caption_verifier.py)
-> checks against, not as a hard pipeline constraint. Deviating from the schema
-> is allowed; it just means you're sampling outside the training distribution.
+The schema below describes the exact structure the model was trained on, and matching it minimizes 
+train/eval mismatch so the model generates closer to its full quality. Treat the "required" / "must" language
+in the rest of this section as the format the [`CaptionVerifier`](../src/ideogram4/caption_verifier.py)
+checks against, not as a hard pipeline constraint.
 
 The full caption schema has three top-level fields:
 
@@ -364,7 +344,7 @@ Tips for effective color palette use:
 
 NSFW prompts are blocked. Instead of an image, the model returns a gray screen
 with the text "Image blocked by safety filter". False positive rates for safety
-is higher for non-json like prompts. We are aware that this is an issue an we may
+is high for non-json prompts. We are aware that this is an issue and we may
 make a future checkpoint update to improve it.
 
 # Congratulations!
