@@ -121,6 +121,7 @@ from .model_sampling import ModelSamplingCosmosRFlow
 from .model_sampling import ModelSamplingDiscrete
 from .model_sampling import ModelSamplingDiscreteFlow
 from .model_sampling import ModelSamplingFlux
+from .model_sampling import ModelSamplingFluxDynamicShift
 from .model_sampling import StableCascadeSampling
 from .model_sampling import V_PREDICTION
 from .model_sampling import V_PREDICTION_DDPM
@@ -2906,6 +2907,7 @@ class MageFlow(QwenImage):
 class QwenImage21(QwenImage):
     def __init__(self, model_config, model_type=ModelType.FLUX, device=None):
         super().__init__(model_config, model_type, device=device, unet_model=qwen_image21_model.QwenImage21Transformer2DModel)
+        self.model_sampling = ModelSamplingFluxDynamicShift(model_config)
 
     def get_dynamic_vram__units(self):
         return list(self.diffusion_model.transformer_blocks), []

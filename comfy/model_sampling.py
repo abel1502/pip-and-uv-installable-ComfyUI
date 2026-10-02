@@ -1,6 +1,7 @@
 from typing import Protocol
 import math
 
+import numpy
 import torch
 
 from .ldm.modules.diffusionmodules.util import make_beta_schedule
@@ -477,6 +478,33 @@ class ModelSamplingFlux(torch.nn.Module):
         if percent >= 1.0:
             return 0.0
         return flux_time_shift(self.shift, 1.0, 1.0 - percent)
+
+
+class ModelSamplingFluxDynamicShift(ModelSamplingFlux, CONST):
+    """diffusers' FlowMatchEulerDiscreteScheduler with use_dynamic_shifting and the exponential time shift. The simple
+    schedule depends on the latent: linspace(1, 1 / steps, steps) in float32, shifted by mu, which is linear in the image
+    token count (one per latent pixel), then stretched to end at shift_terminal, then 0. The other schedulers sample the
+    fixed shift."""
+
+    def __init__(self, model_config):
+        super().__init__(model_config)
+        sampling_settings = model_config.sampling_settings
+        self.base_shift = sampling_settings["base_shift"]
+        self.max_shift = sampling_settings["max_shift"]
+        self.base_image_seq_len = sampling_settings["base_image_seq_len"]
+        self.max_image_seq_len = sampling_settings["max_image_seq_len"]
+        self.shift_terminal = sampling_settings["shift_terminal"]
+
+    def simple_sigmas(self, steps, latent_shape):
+        # the expressions and dtypes of diffusers' calculate_shift, set_timesteps, time_shift and stretch_shift_to_terminal
+        m = (self.max_shift - self.base_shift) / (self.max_image_seq_len - self.base_image_seq_len)
+        mu = latent_shape[-2] * latent_shape[-1] * m + (self.base_shift - m * self.base_image_seq_len)
+        sigmas = numpy.linspace(1.0, 1 / steps, steps).astype(numpy.float32)
+        sigmas = math.exp(mu) / (math.exp(mu) + (1 / sigmas - 1) ** 1.0)
+        one_minus_z = 1 - sigmas
+        if one_minus_z[-1] != 0:  # a single step stays at sigma 1, where the stretch is 0 / 0
+            sigmas = 1 - (one_minus_z / (one_minus_z[-1] / (1 - self.shift_terminal)))
+        return torch.cat([torch.from_numpy(sigmas).to(dtype=torch.float32), torch.zeros(1)])
 
 
 class ModelSamplingCosmosRFlow(ModelSamplingContinuousEDM):

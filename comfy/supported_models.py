@@ -2198,10 +2198,16 @@ class QwenImage21(supported_models_base.BASE):
         "image_model": "qwen_image21",
     }
 
-    # scheduler mu at 1024x1024 (base 0.5 @ 256 tokens, max 0.9 @ 8192)
+    # Qwen/Qwen-Image-2.1 scheduler/scheduler_config.json: dynamic shifting from mu 0.5 at 256 image tokens to 0.9 at
+    # 8192, shift_terminal 0.02; "shift" is mu at 1024x1024 for the schedulers that sample a fixed shift
     sampling_settings = {
         "multiplier": 1.0,
         "shift": 0.69,
+        "base_shift": 0.5,
+        "max_shift": 0.9,
+        "base_image_seq_len": 256,
+        "max_image_seq_len": 8192,
+        "shift_terminal": 0.02,
     }
 
     memory_usage_factor = 6.0
