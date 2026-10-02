@@ -296,3 +296,45 @@ def test_ideogram4_samples_the_official_loop(tiny_ideogram4, negative):
             neg_v = -uncond.model.diffusion_model(z, t)
         z = z + (guidance[j] * pos_v + (1 - guidance[j]) * neg_v) * (sigmas[j] - sigmas[j + 1]).item()
     torch.testing.assert_close(out["samples"], cond.model.process_latent_out(z.cpu()), rtol=1e-5, atol=1e-6)
+
+
+# ideogram4 latent_norm.py LATENT_SHIFT and LATENT_SCALE as float32 bytes, and the Flux.2 VAE's bn statistics
+# (black-forest-labs/FLUX.2-dev ae.safetensors and vae/diffusion_pytorch_model.safetensors)
+IDEOGRAM4_LATENT_NORM_SHA256 = {
+    "LATENT_SHIFT": "500785259e56d2e507f450e2a81b4e714b747104100a4ddac1c9681e20c62620",
+    "LATENT_SCALE": "8aff847687d2712d2363ec1267bf7daf83efe14a9aa7f28547e72b8363e899cc",
+    "FLUX2_VAE_BN_MEAN": "4c1979e1636ba68bd878a327b7e84e3c8d9ea2ca6422b7e1455e3eba02b977da",
+    "FLUX2_VAE_BN_VAR": "a1cfa04c03e4b0c58b858d3e72b0d869a763fad85d37f8eeb130d0feb4d64f78",
+}
+
+
+def test_ideogram4_latent_norm_is_the_reference_and_the_flux2_vae():
+    import hashlib
+    from comfy.ldm.ideogram4 import latent_norm
+    for name, digest in IDEOGRAM4_LATENT_NORM_SHA256.items():
+        values = torch.tensor(getattr(latent_norm, name), dtype=torch.float32)
+        assert values.shape == (128,)
+        assert hashlib.sha256(values.numpy().tobytes()).hexdigest() == digest, name
+
+
+def test_ideogram4_vae_decodes_the_reference_latent():
+    """pipeline_ideogram4._decode: tokens (pi, pj, c) * LATENT_SCALE + LATENT_SHIFT, unpatched, into the decoder.
+    ComfyUI decodes process_out(z) through the VAE, which first applies bn: z * sqrt(var + 1e-4) + mean, then
+    unpatches (c pi pj) i j -> c (i pi) (j pj)."""
+    from comfy.ldm.ideogram4 import latent_norm
+    latent_format = comfy.supported_models.Ideogram4.latent_format()
+    gh, gw = 3, 5
+    z = torch.randn(2, 128, gh, gw, generator=torch.Generator().manual_seed(0))
+    # the reference token layout, as Ideogram4Transformer2DModel packs it
+    tokens = z.view(2, 32, 2, 2, gh, gw).permute(0, 4, 5, 2, 3, 1).reshape(2, gh * gw, 128)
+    shift = torch.tensor(latent_norm.LATENT_SHIFT, dtype=torch.float32)
+    scale = torch.tensor(latent_norm.LATENT_SCALE, dtype=torch.float32)
+    reference = tokens * scale + shift
+    reference = reference.view(2, gh, gw, 2, 2, 32).permute(0, 5, 1, 3, 2, 4).reshape(2, 32, gh * 2, gw * 2)
+
+    out = latent_format.process_out(z)
+    bn_std = torch.sqrt(torch.tensor(latent_norm.FLUX2_VAE_BN_VAR).view(1, -1, 1, 1) + 1e-4)
+    bn_mean = torch.tensor(latent_norm.FLUX2_VAE_BN_MEAN).view(1, -1, 1, 1)
+    vae_in = (out * bn_std + bn_mean).view(2, 32, 2, 2, gh, gw).permute(0, 1, 4, 2, 5, 3).reshape(2, 32, gh * 2, gw * 2)
+    torch.testing.assert_close(vae_in, reference, rtol=1e-6, atol=1e-6)
+    torch.testing.assert_close(latent_format.process_in(out), z, rtol=1e-5, atol=1e-5)

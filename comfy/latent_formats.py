@@ -1,4 +1,5 @@
 from . import nested_tensor
+from .ldm.ideogram4 import latent_norm
 import torch
 
 
@@ -256,6 +257,26 @@ class Flux2(LatentFormat):
 
     def process_out(self, latent):
         return latent
+
+
+class Ideogram4(Flux2):
+    """The Flux.2 VAE's latents, with Ideogram 4's own normalisation: the reference pipeline decodes
+    z * LATENT_SCALE + LATENT_SHIFT, and ComfyUI's VAE decodes latent * sqrt(bn_var + 1e-4) + bn_mean. The
+    reference constants are per token channel in (pi, pj, c) order; the latent's channels are (c, pi, pj)."""
+
+    def __init__(self):
+        super().__init__()
+        self.shift = torch.tensor(latent_norm.LATENT_SHIFT).view(2, 2, 32).permute(2, 0, 1).reshape(1, 128, 1, 1)
+        self.scale = torch.tensor(latent_norm.LATENT_SCALE).view(2, 2, 32).permute(2, 0, 1).reshape(1, 128, 1, 1)
+        self.bn_mean = torch.tensor(latent_norm.FLUX2_VAE_BN_MEAN).view(1, 128, 1, 1)
+        self.bn_std = torch.sqrt(torch.tensor(latent_norm.FLUX2_VAE_BN_VAR).view(1, 128, 1, 1) + 1e-4)
+
+    def process_in(self, latent):
+        return (latent * self.bn_std.to(latent) + self.bn_mean.to(latent) - self.shift.to(latent)) / self.scale.to(latent)
+
+    def process_out(self, latent):
+        return (latent * self.scale.to(latent) + self.shift.to(latent) - self.bn_mean.to(latent)) / self.bn_std.to(latent)
+
 
 class TripoSplat(LatentFormat):
     # Sequence latent (B, 8192, 16) the camera token rides alongside as a second nested latent

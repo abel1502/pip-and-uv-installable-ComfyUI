@@ -2177,7 +2177,7 @@ class Ideogram4(supported_models_base.BASE):
         "mrope_section": [24, 20, 20],
         "norm_eps": 1e-5,
     }
-    latent_format = latent_formats.Flux2
+    latent_format = latent_formats.Ideogram4
 
     supported_inference_dtypes = [torch.bfloat16, torch.float32]
 
