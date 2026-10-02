@@ -13,6 +13,12 @@ example). The bundled `image_qwen_image_2_1_t2i` template runs the same rewriter
 (`qwen3.5_9b_qwen_image_2.1_pe_t2i`) through `TextGenerate`, with this system prompt ending in a
 plain-paragraph output contract instead of the JSON one.
 
+The template's KSampler starts at 25 steps; run it with `--steps 40` for the official count. On
+Qwen Image 2.1 the `simple` scheduler samples the official scheduler config
+(`scheduler/scheduler_config.json`): `linspace(1, 1/N, N)` shifted by mu, which goes from 0.5 at
+256 image tokens to 0.9 at 8192 (one token per 16x16 pixels, 0.6935 at 1024x1024), stretched so
+the last step is at 0.02.
+
 ---
 
 # 1. README.md

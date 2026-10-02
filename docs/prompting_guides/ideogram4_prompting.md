@@ -4,6 +4,16 @@ Vendored snapshot from: https://github.com/ideogram-oss/ideogram4/blob/main/docs
 
 Fetched: 2026-06-03
 
+Sampler presets (`sampler_configs.py`): `V4_QUALITY_48`, the default, is 48 steps, mu 0, std 1.5,
+guidance 7 with the last 3 steps at 3; `V4_DEFAULT_20` is 20 steps, mu 0, std 1.75, last 2 at 3;
+`V4_TURBO_12` is 12 steps, mu 0.5, std 1.75, last 1 at 3. The unconditional pass is image-only
+(no text tokens), and the loop runs from sigma 1 - t_min to 1 - t_max (about 5.5e-4), not 0. The
+bundled `image_ideogram4_t2i` template selects its Default preset and switches to cfg 3 below
+sigma 0.3 (`CFGOverride` 3, 0.7, 1), which is 6, 3 and 2 of its 20 steps at 512, 1024 and 2048
+pixels square. For `V4_QUALITY_48` run it with
+`--set 98:156.inputs.choice=Quality --set 98:157.inputs.last_steps=3`. `Ideogram4Scheduler` keeps
+the reference endpoints, and the template's `ConditioningZeroOut` negative runs the image-only pass.
+
 ---
 
 # Prompting Guide
