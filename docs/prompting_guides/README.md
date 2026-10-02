@@ -27,7 +27,7 @@ environment-install commands into a ComfyUI environment: use the repository's
 ## Alibaba
 - [Wan text-to-video/image-to-video prompt guide](alibaba_wan_video_prompting.md) ([source](https://www.alibabacloud.com/help/en/model-studio/text-to-video-prompt))
 - [Qwen Image Edit guide](alibaba_qwen_image_edit_prompting.md) ([source](https://www.alibabacloud.com/help/en/model-studio/qwen-image-edit-guide))
-- [Qwen Image 2.1 prompting guide](qwen_image_2_1_prompting.md) ([source](https://github.com/QwenLM/Qwen-Image-2.1); official t2i rewriting system prompt, RGBA format, 40 steps)
+- [Qwen Image 2.1 prompting guide](qwen_image_2_1_prompting.md) ([source](https://github.com/QwenLM/Qwen-Image-2.1); README, prompt_rewrite README and the official t2i rewriting system prompt, complete)
 
 ## MiniMax
 - [MiniMax H3 video-generation guide](minimax_h3_video_generation.md) ([source](https://platform.minimax.io/docs/guides/video-generation))
