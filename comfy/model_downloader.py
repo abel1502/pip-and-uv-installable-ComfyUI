@@ -82,10 +82,9 @@ def parse_hf_uri(uri: str) -> HuggingFile:
     if len(path_parts) == 2:
         repo_id = path_parts[0]
         filename = path_parts[1]
-    elif "." in path_parts[1] and len(path_parts[1].split(".")[-1]) <= 10:
-        repo_id = path_parts[0]
-        filename = "/".join(path_parts[1:])
     else:
+        # with three or more parts the first two are org/repo; a repo name may hold a dot
+        # (Comfy-Org/Qwen-Image-2.1, black-forest-labs/FLUX.2-dev)
         repo_id = f"{path_parts[0]}/{path_parts[1]}"
         filename = "/".join(path_parts[2:])
 

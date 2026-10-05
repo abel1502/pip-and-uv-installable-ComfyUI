@@ -104,6 +104,16 @@ class TestParseHfUri:
         assert hf_file.repo_id == "Comfy-Org/flux1-schnell"
         assert hf_file.filename == "split_files/diffusion_models/flux1-schnell-fp8.safetensors"
 
+    def test_parses_a_repo_name_with_a_dot(self):
+        """Repo names such as Qwen-Image-2.1 and FLUX.2-dev are not file names."""
+        for uri, repo, filename in (
+                ("hf://Comfy-Org/Qwen-Image-2.1/text_encoders/qwen3vl_8b_bf16.safetensors",
+                 "Comfy-Org/Qwen-Image-2.1", "text_encoders/qwen3vl_8b_bf16.safetensors"),
+                ("hf://black-forest-labs/FLUX.2-dev/flux2-dev.safetensors",
+                 "black-forest-labs/FLUX.2-dev", "flux2-dev.safetensors")):
+            hf_file = parse_hf_uri(uri)
+            assert (hf_file.repo_id, hf_file.filename) == (repo, filename)
+
     def test_parses_dataset_uri(self):
         """Test parsing a datasets URI."""
         uri = "hf://datasets/squad/data/train.json"
