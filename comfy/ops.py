@@ -2196,7 +2196,8 @@ def mixed_precision_ops(quant_config={}, compute_dtype=torch.bfloat16, full_prec
                 if getattr(self, 'layout_type', None) is not None:
                     try:
                         # dtype is now implicit in the layout class
-                        weight = QuantizedTensor.from_float(weight, self.layout_type, scale="recalculate", stochastic_rounding=seed, inplace_ops=True).to(self.weight.dtype)
+                        weight = QuantizedTensor.from_float(weight, self.layout_type, scale="recalculate", stochastic_rounding=seed, inplace_ops=True,
+                                                            **_requantize_kwargs(self.weight)).to(self.weight.dtype)
                     except NotImplementedError:
                         # Offline-calibrated layouts (SVDQuant, AWQ) cannot
                         # requantize a patched weight; keep it dense instead.
@@ -2470,6 +2471,20 @@ def mixed_precision_ops(quant_config={}, compute_dtype=torch.bfloat16, full_prec
                 return super().forward_comfy_cast_weights(input, out_dtype=out_dtype)
 
     return MixedPrecisionOps
+
+def _requantize_kwargs(weight) -> dict:
+    """The quantization a patched weight is requantized with: the one it was loaded in. An INT8
+    ConvRot weight stays Hadamard-rotated with per-output-channel scales, and a per-channel INT8
+    weight keeps its per-channel scales, instead of falling back to one unrotated tensorwise scale."""
+    if not isinstance(weight, QuantizedTensor) or weight._layout_cls != "TensorWiseINT8Layout":
+        return {}
+    params = weight._params
+    if getattr(params, "convrot", False):
+        return {"per_channel": True, "convrot": True, "convrot_groupsize": int(params.convrot_groupsize)}
+    if params.scale.numel() > 1:
+        return {"per_channel": True}
+    return {}
+
 
 def get_disabled_quant_formats(device=None):
     """Quantized formats whose fast matmul must be emulated on ``device``."""

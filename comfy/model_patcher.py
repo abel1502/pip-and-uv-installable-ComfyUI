@@ -301,10 +301,6 @@ def should_bake_lowvram_patch(module, weight, set_func=None) -> bool:
     return set_func is not None
 
 
-def is_quantized_weight(weight) -> bool:
-    return isinstance(weight, QuantizedTensor) or is_quantized(weight)
-
-
 def lowvram_materialization_geometry(module, param_key, tensor, model_dtype, function_count=0):
     if tensor is None:
         return None
@@ -1108,7 +1104,10 @@ class ModelPatcher(ModelManageable, PatchSupport, metaclass=_ModelPatcherFactory
         if key not in self.backup and not return_weight:
             self.backup[key] = collections.namedtuple('Dimension', ['weight', 'inplace_update'])(weight.to(device=self.offload_device, copy=inplace_update), inplace_update)
 
-        if is_quantized_weight(weight):
+        # GGUF ops apply the patches attached to the tensor at forward time. A QuantizedTensor's ops
+        # never read them, so a patched QuantizedTensor dequantizes, takes the patch and requantizes
+        # below; only an unpatched one moves as it is.
+        if is_quantized(weight) or (isinstance(weight, QuantizedTensor) and key not in self.patches):
             out_weight = weight.to(device_to)
             if key in self.patches:
                 patches = move_patch_to_device(self.patches[key], self.load_device if self.gguf.patch_on_device else self.offload_device)
