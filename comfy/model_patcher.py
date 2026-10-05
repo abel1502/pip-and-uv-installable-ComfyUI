@@ -2168,11 +2168,19 @@ class ModelPatcherDynamic(ModelPatcher):
         # use all ModelPatcherDynamic this is ignored and its all done dynamically.
         return super().memory_required(input_shape=input_shape) * 1.3 + (1024 ** 3)
 
-    def restore_loaded_backups(self):
+    def restore_loaded_backups(self, keep_baked=False):
+        """Put the original weights back. keep_baked: weights whose patch was baked in under this
+        patcher's patches (the same patches_uuid the model was last loaded with) stay baked, so a
+        reload does not dequantize, patch and requantize them again."""
         restored = self.model.model_loaded_weight_memory
+        keep = keep_baked and getattr(self.model, "current_weight_patches_uuid", None) == self.patches_uuid
+        baked = getattr(self.model, "dynamic_baked_keys", set()) if keep else set()
         for key in list(self.backup.keys()):
+            if key in baked:
+                continue
             bk = self.backup.pop(key)
             utils.set_attr_param(self.model, key, bk.weight)
+        self.model.dynamic_baked_keys = set(baked)
         for key in list(self.backup_buffers.keys()):
             utils.set_attr_buffer(self.model, key, self.backup_buffers.pop(key))
         self.model.model_loaded_weight_memory = 0
@@ -2193,7 +2201,7 @@ class ModelPatcherDynamic(ModelPatcher):
 
         num_patches = 0
         allocated_size = 0
-        self.restore_loaded_backups()
+        self.restore_loaded_backups(keep_baked=True)
 
         with self.use_ejected():
             self.unpatch_hooks()
@@ -2255,13 +2263,22 @@ class ModelPatcherDynamic(ModelPatcher):
                     weight, set_func, _ = get_key_weight(self.model, key)
                     if weight is None:
                         return (False, 0)
+                    baked = False
                     if key in self.patches:
                         if lora.calculate_shape(self.patches[key], weight, key) != weight.shape:
                             return (True, 0)
                         if should_bake_lowvram_patch(m, weight, set_func):
-                            self.patch_weight_to_device(key)
+                            if key not in self.model.dynamic_baked_keys:
+                                # dequantize, patch and requantize on the GPU (the CPU takes minutes
+                                # for a model's worth of ConvRot rotations), then keep it host-side
+                                # where the dynamic loader streams it from
+                                self.patch_weight_to_device(key, device_to=device_to)
+                                weight, _, _ = get_key_weight(self.model, key)
+                                utils.set_attr_param(self.model, key, weight.to(self.offload_device))
+                                self.model.dynamic_baked_keys.add(key)
                             weight, _, _ = get_key_weight(self.model, key)
                             setattr(m, param_key + "_lowvram_function", None)
+                            baked = True
                         else:
                             lowvram_patch = LowVramPatch(key, self.patches)
                             lowvram_patch._pin_state = pin_state
@@ -2285,7 +2302,8 @@ class ModelPatcherDynamic(ModelPatcher):
                         model_dtype,
                         function_count=len(weight_function),
                     )
-                    has_lowvram_patch = key in self.patches
+                    # a baked patch is in the (requantized) weight itself: it streams natively
+                    has_lowvram_patch = key in self.patches and not baked
                     vram_bytes = lowvram_materialization_vram_bytes(
                         vram_geometry,
                         function_count=len(weight_function),
