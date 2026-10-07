@@ -32,7 +32,8 @@ def setup_debug_hang(config: Configuration):
         if _dumping_traceback:
             raise KeyboardInterrupt
         _dumping_traceback = True
-        faulthandler.dump_traceback(all_threads=True)
+        # IPython patches enable(), but not dump_traceback(), to use this stream.
+        faulthandler.dump_traceback(file=sys.__stderr__, all_threads=True)
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGINT, dump_traceback_on_sigint)
