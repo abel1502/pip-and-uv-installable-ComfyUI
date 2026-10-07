@@ -6,11 +6,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import comfy.model_management
-import comfy.patcher_extension
-import comfy.rmsnorm
-from comfy.ldm.modules.attention import optimized_attention
-from comfy.ldm.flux.math import apply_rope
+from ... import model_management
+from ... import patcher_extension
+from ... import rmsnorm
+from ..modules.attention import AttentionTensorContainer, ComfyAttention, optimized_attention
+from ..flux.math import apply_rope
 
 
 class MultiHeadRMSNorm(nn.Module):
@@ -19,8 +19,8 @@ class MultiHeadRMSNorm(nn.Module):
         self.gamma = nn.Parameter(torch.empty(heads, dim, dtype=dtype, device=device))
 
     def forward(self, x):
-        x = comfy.rmsnorm.rms_norm(x)
-        return x * comfy.model_management.cast_to(self.gamma, x.dtype, x.device)
+        x = rmsnorm.rms_norm(x)
+        return x * model_management.cast_to(self.gamma, x.dtype, x.device)
 
 
 # Positional embeddings
@@ -55,9 +55,9 @@ class RePo3DRotaryEmbedding(nn.Module):
         out = self.final_map(feat)
         B, L, _ = out.shape
         delta_pos = out.reshape(B, L, self.num_heads, 3)
-        f0 = comfy.model_management.cast_to(self.freqs_0, torch.float32, out.device)
-        f1 = comfy.model_management.cast_to(self.freqs_1, torch.float32, out.device)
-        f2 = comfy.model_management.cast_to(self.freqs_2, torch.float32, out.device)
+        f0 = model_management.cast_to(self.freqs_0, torch.float32, out.device)
+        f1 = model_management.cast_to(self.freqs_1, torch.float32, out.device)
+        f2 = model_management.cast_to(self.freqs_2, torch.float32, out.device)
         ang_0 = delta_pos[..., 0].unsqueeze(-1) * f0 * torch.pi
         ang_1 = delta_pos[..., 1].unsqueeze(-1) * f1 * torch.pi
         ang_2 = delta_pos[..., 2].unsqueeze(-1) * f2 * torch.pi
@@ -100,9 +100,13 @@ class PcdAbsolutePositionEmbedder(nn.Module):
         return out.to(orig_dtype)
 
 
-def attention(q, k, v, transformer_options=None):
+def attention(q, k, v, transformer_options=None, preferred_attention=None):
+    if isinstance(q, AttentionTensorContainer):
+        q, k, v = q.take(), k.take(), v.take()
+    heads = q.shape[2]
+    q, k, v = AttentionTensorContainer(q.transpose(1, 2)), AttentionTensorContainer(k.transpose(1, 2)), AttentionTensorContainer(v.transpose(1, 2))
     # q, k, v: (B, L, heads, dim) -> (B, L, heads, dim). Shared optimized_attention call convention.
-    out = optimized_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), heads=q.shape[2],
+    out = optimized_attention(q, k, v, heads=heads, preferred_attention=preferred_attention,
                               skip_reshape=True, skip_output_reshape=True, low_precision_attention=False,
                               transformer_options=transformer_options)
     return out.transpose(1, 2)
@@ -127,6 +131,7 @@ class RopeMultiHeadAttention(nn.Module):
     def __init__(self, channels, num_heads, qkv_bias=True, qk_rms_norm=False, use_rope=False,
                  dtype=None, device=None, operations=None):
         super().__init__()
+        self.comfy_attention = ComfyAttention()
         self.channels = channels
         self.num_heads = num_heads
         self.head_dim = channels // num_heads
@@ -147,7 +152,9 @@ class RopeMultiHeadAttention(nn.Module):
         if self.qk_rms_norm:
             q = self.q_norm(q)
             k = self.k_norm(k)
-        h = attention(q, k, v, transformer_options)  # (B, L, heads, dim)
+        del qkv
+        q, k, v = AttentionTensorContainer(q), AttentionTensorContainer(k), AttentionTensorContainer(v)
+        h = attention(q, k, v, transformer_options, preferred_attention=self.comfy_attention)  # (B, L, heads, dim)
         return self.out(h.reshape(B, L, C))
 
 
@@ -175,7 +182,7 @@ class UnifiedTransformerBlock(nn.Module):
         if self.modulation:
             if not self.share_mod:
                 mod = self.adaLN_modulation(mod)
-            mod = mod + comfy.model_management.cast_to(self.shift_table, mod.dtype, mod.device)
+            mod = mod + model_management.cast_to(self.shift_table, mod.dtype, mod.device)
             shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = mod.chunk(6, dim=1)
             h = torch.addcmul(shift_msa.unsqueeze(1), self.norm1(x), 1 + scale_msa.unsqueeze(1))
             x = torch.addcmul(x, self.attn(h, rope_emb=rotary_emb, transformer_options=transformer_options), gate_msa.unsqueeze(1))
@@ -277,10 +284,10 @@ class LatentSeqMMFlowModel(nn.Module):
         self.cam_out_layer = operations.Linear(model_channels, cam_channels, **factory_kwargs)
 
     def forward(self, x, t, context=None, ref_latents=None, transformer_options={}, **kwargs):
-        return comfy.patcher_extension.WrapperExecutor.new_class_executor(
+        return patcher_extension.WrapperExecutor.new_class_executor(
             self._forward,
             self,
-            comfy.patcher_extension.get_all_wrappers(comfy.patcher_extension.WrappersMP.DIFFUSION_MODEL, transformer_options)
+            patcher_extension.get_all_wrappers(patcher_extension.WrappersMP.DIFFUSION_MODEL, transformer_options)
         ).execute(x, t, context, ref_latents, transformer_options, **kwargs)
 
     def _forward(self, x, t, context=None, ref_latents=None, transformer_options={}, **kwargs):
@@ -318,7 +325,7 @@ class LatentSeqMMFlowModel(nn.Module):
         h_x = F.layer_norm(h[:, :z.shape[1]].float(), h.shape[-1:]).to(z)
         h_cam = F.layer_norm(h[:, -cam.shape[1]:].float(), h.shape[-1:]).to(z)
 
-        shift, scale = (comfy.model_management.cast_to(self.shift_table, t_emb.dtype, t_emb.device) + t_emb.unsqueeze(1)).chunk(2, dim=1)
+        shift, scale = (model_management.cast_to(self.shift_table, t_emb.dtype, t_emb.device) + t_emb.unsqueeze(1)).chunk(2, dim=1)
         scale = 1 + scale
         h_x = torch.addcmul(shift, h_x, scale)
         h_cam = torch.addcmul(shift, h_cam, scale)

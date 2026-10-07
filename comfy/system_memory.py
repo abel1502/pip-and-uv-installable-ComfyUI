@@ -80,11 +80,14 @@ def _cgroup_directories():
 
 
 def _limit_in(directory):
-    for name in ("memory.max", "memory.limit_in_bytes"):
+    # memory.high is a limit too: above it the kernel throttles the cgroup
+    # into reclaim, which stalls it indefinitely when the excess is pinned.
+    limits = []
+    for name in ("memory.max", "memory.high", "memory.limit_in_bytes"):
         value = _read_int(os.path.join(directory, name))
         if value is not None and value > 0:
-            return value
-    return None
+            limits.append(value)
+    return min(limits, default=None)
 
 
 def _working_set_in(directory):

@@ -82,10 +82,9 @@ def parse_hf_uri(uri: str) -> HuggingFile:
     if len(path_parts) == 2:
         repo_id = path_parts[0]
         filename = path_parts[1]
-    elif "." in path_parts[1] and len(path_parts[1].split(".")[-1]) <= 10:
-        repo_id = path_parts[0]
-        filename = "/".join(path_parts[1:])
     else:
+        # with three or more parts the first two are org/repo; a repo name may hold a dot
+        # (Comfy-Org/Qwen-Image-2.1, black-forest-labs/FLUX.2-dev)
         repo_id = f"{path_parts[0]}/{path_parts[1]}"
         filename = "/".join(path_parts[2:])
 
@@ -821,6 +820,8 @@ KNOWN_DIFF_CONTROLNETS: Final[KnownDownloadables] = KnownDownloadables([
 ], folder_name="diff_controlnet")
 
 KNOWN_APPROX_VAES: Final[KnownDownloadables] = KnownDownloadables([
+    UrlFile("https://raw.githubusercontent.com/madebyollin/taesd/main/taeqi2_1_encoder.pth", show_in_ui=False),
+    UrlFile("https://raw.githubusercontent.com/madebyollin/taesd/main/taeqi2_1_decoder.pth", show_in_ui=False),
     HuggingFile("madebyollin/taesd", "taesd_decoder.safetensors", show_in_ui=False),
     HuggingFile("madebyollin/taesd", "taesd_encoder.safetensors", show_in_ui=False),
     HuggingFile("madebyollin/taesdxl", "taesdxl_decoder.safetensors", show_in_ui=False),
@@ -842,6 +843,8 @@ KNOWN_APPROX_VAES: Final[KnownDownloadables] = KnownDownloadables([
 ], folder_name="vae_approx")
 
 KNOWN_VAES: Final[KnownDownloadables] = KnownDownloadables([
+    HuggingFile("Comfy-Org/Ming-Image", "vae/ming_image_vae_bf16.safetensors"),
+    HuggingFile("Comfy-Org/MiniMax-H3", "vae/minimax_h3_video_vae_int8_convrot.safetensors"),
     HuggingFile("Comfy-Org/Qwen-Image-2.1", "vae/qwen_image_2.1_vae_bf16.safetensors"),
     HuggingFile("Comfy-Org/marigold-v2-0", "vae/marigold_v2_albedo_vae.safetensors"),
     HuggingFile("Comfy-Org/marigold-v2-0", "vae/marigold_v2_depth_log_stage2_vae.safetensors"),
@@ -941,6 +944,7 @@ KNOWN_HUGGINGFACE_MODEL_REPOS: Final[Set[str]] = {
 }
 
 KNOWN_UNET_MODELS: Final[KnownDownloadables] = KnownDownloadables([
+    HuggingFile("Comfy-Org/Ming-Image", "diffusion_models/ming_image_0.1_design_int8_convrot.safetensors"),
     HuggingFile("Comfy-Org/Qwen-Image-2.1", "diffusion_models/qwen_image_2.1_bf16.safetensors"),
     HuggingFile("Comfy-Org/Qwen-Image-2.1", "diffusion_models/qwen_image_2.1_int8_convrot.safetensors"),
     HuggingFile("Comfy-Org/marigold-v2-0", "diffusion_models/qwen_image_edit_2509_int8_convrot.safetensors"),
@@ -1271,6 +1275,8 @@ KNOWN_UNET_MODELS: Final[KnownDownloadables] = KnownDownloadables([
     HuggingFile("bertbobson/Sulphur-2-base-INT8-ConvRot", "sulphur_distil_INT8_ConvRot.safetensors"),
 ], folder_names=["diffusion_models", "unet"])
 KNOWN_CLIP_MODELS: Final[KnownDownloadables] = KnownDownloadables([
+    HuggingFile("Comfy-Org/Ming-Image", "text_encoders/ming_image_0.1_ling_mini_2.0_int8_convrot.safetensors"),
+    HuggingFile("Comfy-Org/Qwen3.8-27B", "text_encoders/qwen3.8_27b_w4a8.safetensors"),
     HuggingFile("Comfy-Org/Qwen-Image-2.1", "text_encoders/qwen3.5_9b_qwen_image_2.1_pe_i2i.int8_convrot.safetensors"),
     HuggingFile("Comfy-Org/Qwen-Image-2.1", "text_encoders/qwen3.5_9b_qwen_image_2.1_pe_t2i.int8_convrot.safetensors"),
     HuggingFile("Comfy-Org/Qwen-Image-2.1", "text_encoders/qwen3vl_8b_bf16.safetensors"),

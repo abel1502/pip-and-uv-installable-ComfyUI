@@ -685,8 +685,7 @@ def _collect_all_workflow_params() -> list[tuple[str, str, str]]:
     """Scan the cache dir for example workflow JSON files.
 
     Returns (node_id, workflow_name, filepath) triples.
-    If the cache dir doesn't exist yet, returns an empty list (the session
-    fixture will install nodes on first run).
+    Populate the cache before collecting this suite.
     """
     custom_nodes_root = _CACHE_DIR / "custom_nodes"
     if not custom_nodes_root.is_dir():
@@ -701,6 +700,14 @@ def _collect_all_workflow_params() -> list[tuple[str, str, str]]:
 
 
 _ALL_WORKFLOW_PARAMS = _collect_all_workflow_params()
+
+
+def test_workflow_examples_are_available():
+    assert _ALL_WORKFLOW_PARAMS, (
+        f"No custom-node workflows found in {_CACHE_DIR / 'custom_nodes'}. "
+        "Populate COMFY_TEST_CACHE_DIR before collecting this suite; "
+        "an empty parameter list does not exercise any workflows."
+    )
 
 # Build the pytest parameter list: id string is "node_id/workflow_name"
 _PARAM_IDS = [f"{node_id}/{wf}" for node_id, wf, _ in _ALL_WORKFLOW_PARAMS]

@@ -7,19 +7,24 @@ AdaLN-single modulation, GQA + per-head QK-norm + sigmoid-gated attention, SwiGL
 
 from typing import Optional
 
+from einops import rearrange
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange
 
-import comfy.model_management
-import comfy.patcher_extension
-import comfy.ldm.common_dit
+from .. import common_dit
+from ... import model_management
+from ... import patcher_extension
 from ... import utils
-from comfy.ldm.flux.layers import EmbedND, timestep_embedding
-from comfy.ldm.flux.math import apply_rope
-from comfy.ldm.modules.attention import optimized_attention_masked
-from comfy.tensor_parallel.operations import column_parallel_linear, local_size, row_parallel_linear
+from ...tensor_parallel.operations import column_parallel_linear
+from ...tensor_parallel.operations import local_size
+from ...tensor_parallel.operations import row_parallel_linear
+from ..flux.layers import EmbedND
+from ..flux.layers import timestep_embedding
+from ..flux.math import apply_rope
+from ..modules.attention import AttentionTensorContainer
+from ..modules.attention import ComfyAttention
+from ..modules.attention import optimized_attention_masked
 
 
 class RMSNorm(nn.Module):
@@ -32,7 +37,7 @@ class RMSNorm(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         dtype = x.dtype
-        weight = comfy.model_management.cast_to(self.scale, dtype=torch.float32, device=x.device) + 1.0
+        weight = model_management.cast_to(self.scale, dtype=torch.float32, device=x.device) + 1.0
         return F.rms_norm(x.float(), (x.shape[-1],), weight=weight, eps=self.eps).to(dtype)
 
 
@@ -65,6 +70,7 @@ class Attention(nn.Module):
     def __init__(self, dim: int, heads: int, kvheads: Optional[int] = None, bias: bool = False,
                  device=None, dtype=None, operations=None):
         super().__init__()
+        self.comfy_attention = ComfyAttention()
         global_kvheads = kvheads if kvheads is not None else heads
         self.heads = local_size(operations, heads, "Krea 2 attention heads")
         self.kvheads = local_size(operations, global_kvheads, "Krea 2 KV heads")
@@ -97,8 +103,9 @@ class Attention(nn.Module):
             rep = self.heads // self.kvheads
             k = k.repeat_interleave(rep, dim=1)
             v = v.repeat_interleave(rep, dim=1)
+        q, k, v = AttentionTensorContainer(q), AttentionTensorContainer(k), AttentionTensorContainer(v)
         out = optimized_attention_masked(q, k, v, self.heads, mask=mask, skip_reshape=True,
-                                         transformer_options=transformer_options)
+                                         preferred_attention=self.comfy_attention, transformer_options=transformer_options)
 
         if "block_index" in transformer_options and "attn1_output_patch" in transformer_patches:
             for p in transformer_patches["attn1_output_patch"]:
@@ -113,7 +120,7 @@ class SimpleModulation(nn.Module):
         self.lin = nn.Parameter(torch.empty(2, dim, device=device, dtype=dtype))
 
     def forward(self, vec):
-        out = vec + comfy.model_management.cast_to(self.lin, dtype=vec.dtype, device=vec.device).unsqueeze(0)
+        out = vec + model_management.cast_to(self.lin, dtype=vec.dtype, device=vec.device).unsqueeze(0)
         scale, shift = out.chunk(2, dim=1)
         return scale, shift
 
@@ -124,7 +131,7 @@ class DoubleSharedModulation(nn.Module):
         self.lin = nn.Parameter(torch.empty(6 * dim, device=device, dtype=dtype))
 
     def forward(self, vec):
-        out = vec + comfy.model_management.cast_to(self.lin, dtype=vec.dtype, device=vec.device)
+        out = vec + model_management.cast_to(self.lin, dtype=vec.dtype, device=vec.device)
         return out.chunk(6, dim=-1)
 
 
@@ -277,15 +284,15 @@ class SingleStreamDiT(nn.Module):
         )
 
     def forward(self, x, timesteps, context, attention_mask=None, ref_latents=None, transformer_options={}, **kwargs):
-        return comfy.patcher_extension.WrapperExecutor.new_class_executor(
+        return patcher_extension.WrapperExecutor.new_class_executor(
             self._forward,
             self,
-            comfy.patcher_extension.get_all_wrappers(comfy.patcher_extension.WrappersMP.DIFFUSION_MODEL, transformer_options),
+            patcher_extension.get_all_wrappers(patcher_extension.WrappersMP.DIFFUSION_MODEL, transformer_options),
         ).execute(x, timesteps, context, attention_mask, ref_latents, transformer_options, **kwargs)
 
     def process_img(self, x, index=0):
         patch = self.patch
-        x = comfy.ldm.common_dit.pad_to_patch_size(x, (patch, patch))
+        x = common_dit.pad_to_patch_size(x, (patch, patch))
         h, w = x.shape[-2] // patch, x.shape[-1] // patch
         img = rearrange(x, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=patch, pw=patch)
 

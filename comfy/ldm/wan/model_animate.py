@@ -1,12 +1,16 @@
-from torch import nn
-import torch
-from typing import Tuple, Optional
-from einops import rearrange
-import torch.nn.functional as F
-import math
-from .model import WanModel, sinusoidal_embedding_1d
-from ..modules.attention import optimized_attention
 from ...model_management import cast_to
+from ..modules.attention import AttentionTensorContainer
+from ..modules.attention import ComfyAttention
+from ..modules.attention import optimized_attention
+from .model import WanModel
+from .model import sinusoidal_embedding_1d
+from einops import rearrange
+from torch import nn
+from typing import Optional
+from typing import Tuple
+import math
+import torch
+import torch.nn.functional as F
 
 
 class CausalConv1d(nn.Module):
@@ -145,6 +149,7 @@ class FaceBlock(nn.Module):
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
+        self.comfy_attention = ComfyAttention()
 
         self.deterministic = False
         self.hidden_size = hidden_size
@@ -197,7 +202,11 @@ class FaceBlock(nn.Module):
 
         q = rearrange(q, "B (L S) H D -> (B L) S (H D)", L=T_comp)
 
-        attn = optimized_attention(q, k, v, heads=self.heads_num)
+        q = AttentionTensorContainer(q)
+        k = AttentionTensorContainer(k)
+        v = AttentionTensorContainer(v)
+        del kv
+        attn = optimized_attention(q, k, v, heads=self.heads_num, preferred_attention=self.comfy_attention)
 
         attn = rearrange(attn, "(B L) S C -> B (L S) C", L=T_comp)
 

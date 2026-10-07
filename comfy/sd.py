@@ -24,6 +24,7 @@ from . import model_sampling
 from . import ops
 from . import sd1_clip
 from . import sdxl_clip
+from . import storage
 from . import utils
 from .clip_model import CLIPVision
 from .component_model.deprecation import _deprecate_method
@@ -63,7 +64,6 @@ from .model_patcher import get_model_patcher_class
 from .pixel_space_convert import PixelspaceConversionVAE
 from .t2i_adapter import adapter
 from .taesd import taesd
-from . import storage
 from .text_encoders import ace
 from .text_encoders import ace15
 from .text_encoders import anima
@@ -90,6 +90,7 @@ from .text_encoders import longcat_image
 from .text_encoders import lt
 from .text_encoders import lumina2
 from .text_encoders import mage_flow
+from .text_encoders import ming_image
 from .text_encoders import minimax
 from .text_encoders import minimax_music
 from .text_encoders import newbie
@@ -585,6 +586,11 @@ class VAE:
                 else:
                     self.latent_channels = sd["taesd_decoder.1.weight"].shape[1]
                 self.first_stage_model = taesd.TAESD(latent_channels=self.latent_channels)
+                if self.latent_channels == 64:  # Qwen Image 2.1 TAESD: 16x, RGBA
+                    self.downscale_ratio = 16
+                    self.upscale_ratio = 16
+                    self.output_channels = 4
+                    self.pad_channel_value = 1.0
             elif "vquantizer.codebook.weight" in sd:  # VQGan: stage a of stable cascade
                 self.first_stage_model = StageA()
                 self.downscale_ratio = 4
@@ -1756,9 +1762,12 @@ class TEModel(Enum):
     QWEN3VL_8B = 35
     GEMMA_4_12B = 36
     QWEN3VL_32B = 37
+    MING_IMAGE = 38
 
 
 def detect_te_model(sd):
+    if "thinker.layers.1.mlp.image_gate.proj.weight" in sd:
+        return TEModel.MING_IMAGE
     if "text_model.encoder.layers.30.mlp.fc1.weight" in sd:
         return TEModel.CLIP_G
     if "text_model.encoder.layers.22.mlp.fc1.weight" in sd:
@@ -2023,6 +2032,11 @@ def load_text_encoder_state_dicts(state_dicts=[], embedding_directory=None, clip
             clip_target.clip = flux.flux2_te(**llama_detect(clip_data), pruned=te_model == TEModel.MISTRAL3_24B_PRUNED_FLUX2)
             clip_target.tokenizer = flux.Flux2Tokenizer
             tokenizer_data["tekken_model"] = clip_data[0].get("tekken_model", None)
+        elif te_model == TEModel.MING_IMAGE:
+            tokenizer_data["tokenizer_json"] = clip_data[0].get("tokenizer_json", None)
+            quant = utils.detect_layer_quantization(clip_data[0], "")
+            clip_target.clip = ming_image.te(dtype_llama=clip_data[0]["thinker.norm.weight"].dtype, llama_quantization_metadata=quant)
+            clip_target.tokenizer = ming_image.MingImageTokenizer
         elif te_model == TEModel.GPT_OSS_20B:
             clip_target.clip = gpt_oss.lens_te(**llama_detect(clip_data))
             clip_target.tokenizer = gpt_oss.LensTokenizer

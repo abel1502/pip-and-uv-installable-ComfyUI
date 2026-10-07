@@ -25,6 +25,7 @@ from .internal_logging import detail
 from .extra_samplers import uni_pc
 from .k_diffusion import sampling as k_diffusion_sampling
 from .model_base import BaseModel
+from .model_sampling import ModelSamplingFluxDynamicShift
 from .model_patcher import ModelPatcher
 from .nested_tensor import NestedTensor
 
@@ -1414,12 +1415,14 @@ SCHEDULER_HANDLERS = {
 }
 SCHEDULER_NAMES = list(SCHEDULER_HANDLERS)
 
-def calculate_sigmas(model_sampling: object, scheduler_name: str, steps: int) -> torch.Tensor:
+def calculate_sigmas(model_sampling: object, scheduler_name: str, steps: int, latent_shape=None) -> torch.Tensor:
     handler = SCHEDULER_HANDLERS.get(scheduler_name)
     if handler is None:
         err = f"error invalid scheduler {scheduler_name}"
         logging.error(err)
         raise ValueError(err)
+    if scheduler_name == "simple" and latent_shape is not None and isinstance(model_sampling, ModelSamplingFluxDynamicShift):
+        return model_sampling.simple_sigmas(steps, latent_shape)
     if handler.use_ms:
         return handler.handler(model_sampling, steps)
     return handler.handler(n=steps, sigma_min=float(model_sampling.sigma_min), sigma_max=float(model_sampling.sigma_max))
@@ -1440,9 +1443,10 @@ class KSampler:
     SAMPLERS = SAMPLER_NAMES
     DISCARD_PENULTIMATE_SIGMA_SAMPLERS = set(('dpm_2', 'dpm_2_ancestral', 'uni_pc', 'uni_pc_bh2'))
 
-    def __init__(self, model, steps, device, sampler=None, scheduler=None, denoise=None, model_options={}):
+    def __init__(self, model, steps, device, sampler=None, scheduler=None, denoise=None, model_options={}, latent_shape=None):
         self.model = model
         self.device = device
+        self.latent_shape = latent_shape
         if scheduler not in self.SCHEDULERS:
             scheduler = self.SCHEDULERS[0]
         if sampler not in self.SAMPLERS:
@@ -1461,7 +1465,7 @@ class KSampler:
             steps += 1
             discard_penultimate_sigma = True
 
-        sigmas = calculate_sigmas(self.model.get_model_object("model_sampling"), self.scheduler, steps)
+        sigmas = calculate_sigmas(self.model.get_model_object("model_sampling"), self.scheduler, steps, self.latent_shape)
 
         if discard_penultimate_sigma:
             sigmas = torch.cat([sigmas[:-2], sigmas[-1:]])

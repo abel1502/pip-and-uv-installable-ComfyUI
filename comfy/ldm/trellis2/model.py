@@ -1,20 +1,23 @@
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
-import comfy.model_management
-import comfy.ops
-from comfy.ldm.trellis2.vae import SparseTensor, SparseLinear, sparse_cat, VarLenTensor
+from ... import model_management
+from ... import ops
+from .vae import SparseTensor, SparseLinear, sparse_cat, VarLenTensor
 from typing import Optional, Tuple, Literal, Union, List
-from comfy.ldm.modules.attention import optimized_attention
-from comfy.ldm.genmo.joint_model.layers import TimestepEmbedder
-from comfy.ldm.flux.math import apply_rope, apply_rope1
+from ..modules.attention import AttentionTensorContainer, ComfyAttention, optimized_attention
+from ..genmo.joint_model.layers import TimestepEmbedder
+from ..flux.math import apply_rope, apply_rope1
 
 
 def dense_attention(q, k, v, **kwargs):
+    if isinstance(q, AttentionTensorContainer):
+        q, k, v = q.take(), k.take(), v.take()
     heads = q.shape[2]
     q = q.permute(0, 2, 1, 3)
     k = k.permute(0, 2, 1, 3)
     v = v.permute(0, 2, 1, 3)
+    q, k, v = AttentionTensorContainer(q), AttentionTensorContainer(k), AttentionTensorContainer(v)
     out = optimized_attention(q, k, v, heads, skip_output_reshape=True, skip_reshape=True, **kwargs)
     return out.permute(0, 2, 1, 3)
 
@@ -35,6 +38,8 @@ def _to_padded(t):
 
 
 def sparse_attention(q, k, v, **kwargs):
+    if isinstance(q, AttentionTensorContainer):
+        q, k, v = q.take(), k.take(), v.take()
     q_padded, q_valid = _to_padded(q)
     k_padded, k_valid = _to_padded(k)
     v_padded, _ = _to_padded(v)
@@ -43,6 +48,8 @@ def sparse_attention(q, k, v, **kwargs):
                            dtype=q_padded.dtype, device=q_padded.device)
         mask.masked_fill_(~k_valid[:, None, None, :], -torch.finfo(q_padded.dtype).max)
         kwargs["mask"] = mask
+    q_padded, k_padded, v_padded = AttentionTensorContainer(q_padded), AttentionTensorContainer(k_padded), AttentionTensorContainer(v_padded)
+    del k, v
     out = dense_attention(q_padded, k_padded, v_padded, **kwargs)
     if isinstance(q, VarLenTensor):
         if q_valid is not None:
@@ -76,8 +83,8 @@ class MultiHeadRMSNorm(nn.Module):
 
     def forward(self, x: Union[VarLenTensor, torch.Tensor]) -> Union[VarLenTensor, torch.Tensor]:
         if isinstance(x, VarLenTensor):
-            return x.replace(F.rms_norm(x.feats, (x.feats.shape[-1],)) * comfy.ops.cast_to_input(self.gamma, x.feats))
-        return F.rms_norm(x, (x.shape[-1],)) * comfy.ops.cast_to_input(self.gamma, x)
+            return x.replace(F.rms_norm(x.feats, (x.feats.shape[-1],)) * ops.cast_to_input(self.gamma, x.feats))
+        return F.rms_norm(x, (x.shape[-1],)) * ops.cast_to_input(self.gamma, x)
 
 class SparseRotaryPositionEmbedder(nn.Module):
     def __init__(self, head_dim: int, dim: int = 3, rope_freq: Tuple[float, float] = (1.0, 10000.0), device=None):
@@ -146,6 +153,7 @@ class SparseMultiHeadAttention(nn.Module):
         device=None, dtype=None, operations=None
     ):
         super().__init__()
+        self.comfy_attention = ComfyAttention()
 
         self.channels = channels
         self.head_dim = channels // num_heads
@@ -199,18 +207,22 @@ class SparseMultiHeadAttention(nn.Module):
             if self.qk_rms_norm:
                 q = self.q_rms_norm(q)
                 k = self.k_rms_norm(k)
+            del qkv
             q, k = self.rope(q, k)
-            h = sparse_attention(q, k, v, transformer_options=transformer_options)
+            q, k, v = AttentionTensorContainer(q), AttentionTensorContainer(k), AttentionTensorContainer(v)
+            h = sparse_attention(q, k, v, transformer_options=transformer_options, preferred_attention=self.comfy_attention)
         else:
             q = self._linear(self.to_q, x)
             q = self._reshape_chs(q, (self.num_heads, -1))
             kv = self._linear(self.to_kv, context)
             kv = self._fused_pre(kv, num_fused=2)
             k, v = kv.unbind(dim=-3)
+            del kv
             if self.qk_rms_norm:
                 q = self.q_rms_norm(q)
                 k = self.k_rms_norm(k)
-            h = sparse_attention(q, k, v, transformer_options=transformer_options)
+            q, k, v = AttentionTensorContainer(q), AttentionTensorContainer(k), AttentionTensorContainer(v)
+            h = sparse_attention(q, k, v, transformer_options=transformer_options, preferred_attention=self.comfy_attention)
         h = self._reshape_chs(h, (-1,))
         h = self._linear(self.to_out, h)
         return h
@@ -325,7 +337,7 @@ class ModulatedSparseTransformerCrossBlock(nn.Module):
 
     def _forward(self, x: SparseTensor, mod: torch.Tensor, context, transformer_options=None) -> SparseTensor:
         if self.share_mod:
-            modulation = comfy.ops.cast_to_input(self.modulation, mod)
+            modulation = ops.cast_to_input(self.modulation, mod)
             shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (modulation + mod).chunk(6, dim=1)
         else:
             shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(mod).chunk(6, dim=1)
@@ -471,6 +483,7 @@ class MultiHeadAttention(nn.Module):
         device=None, dtype=None, operations=None
     ):
         super().__init__()
+        self.comfy_attention = ComfyAttention()
 
         self.channels = channels
         self.head_dim = channels // num_heads
@@ -504,9 +517,11 @@ class MultiHeadAttention(nn.Module):
             assert phases is not None, "Phases must be provided for RoPE"
             # phases is [L, head_dim/2, 2, 2]; broadcast to [1, L, 1, ...]
             # to align with q/k of shape [B, L, H, head_dim].
-            f_cis = comfy.model_management.cast_to(phases, device=q.device).unsqueeze(0).unsqueeze(2)
+            f_cis = model_management.cast_to(phases, device=q.device).unsqueeze(0).unsqueeze(2)
+            del qkv
             q, k = apply_rope(q, k, f_cis)
-            h = dense_attention(q, k, v, transformer_options=transformer_options)
+            q, k, v = AttentionTensorContainer(q), AttentionTensorContainer(k), AttentionTensorContainer(v)
+            h = dense_attention(q, k, v, transformer_options=transformer_options, preferred_attention=self.comfy_attention)
         else:
             Lkv = context.shape[1]
             q = self.to_q(x)
@@ -514,10 +529,12 @@ class MultiHeadAttention(nn.Module):
             q = q.reshape(B, L, self.num_heads, -1)
             kv = kv.reshape(B, Lkv, 2, self.num_heads, -1)
             k, v = kv.unbind(dim=2)
+            del kv
             if self.qk_rms_norm:
                 q = self.q_rms_norm(q)
                 k = self.k_rms_norm(k)
-            h = dense_attention(q, k, v, transformer_options=transformer_options)
+            q, k, v = AttentionTensorContainer(q), AttentionTensorContainer(k), AttentionTensorContainer(v)
+            h = dense_attention(q, k, v, transformer_options=transformer_options, preferred_attention=self.comfy_attention)
         h = h.reshape(B, L, -1)
         h = self.to_out(h)
         return h
@@ -582,7 +599,7 @@ class ModulatedTransformerCrossBlock(nn.Module):
     def _forward(self, x: torch.Tensor, mod: torch.Tensor, context,
                  phases: Optional[torch.Tensor] = None, transformer_options=None) -> torch.Tensor:
         if self.share_mod:
-            mod = comfy.ops.cast_to_input(self.modulation, mod) + mod
+            mod = ops.cast_to_input(self.modulation, mod) + mod
         else:
             mod = self.adaLN_modulation(mod)
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = mod.unsqueeze(1).chunk(6, dim=-1)

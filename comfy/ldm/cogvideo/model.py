@@ -7,9 +7,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ..modules.attention import optimized_attention
+from ...patcher_extension import WrapperExecutor
+from ...patcher_extension import WrappersMP
+from ...patcher_extension import get_all_wrappers
 from ..common_dit import pad_to_patch_size
-from ...patcher_extension import WrapperExecutor, get_all_wrappers, WrappersMP
+from ..modules.attention import AttentionTensorContainer
+from ..modules.attention import ComfyAttention
+from ..modules.attention import optimized_attention
 
 
 def _get_1d_rotary_pos_embed(dim, pos, theta=10000.0):
@@ -241,6 +245,7 @@ class CogVideoXBlock(nn.Module):
                  eps=1e-5, ff_inner_dim=None, ff_bias=True,
                  device=None, dtype=None, operations=None):
         super().__init__()
+        self.comfy_attention = ComfyAttention()
         self.dim = dim
         self.num_heads = num_heads
         self.head_dim = head_dim
@@ -290,12 +295,15 @@ class CogVideoXBlock(nn.Module):
             k_img = apply_rotary_emb(k_img, image_rotary_emb)
             q = torch.cat([q[:, :text_seq_length], q_img.transpose(1, 2)], dim=1)
             k = torch.cat([k[:, :text_seq_length], k_img.transpose(1, 2)], dim=1)
+            del q_img, k_img
 
+        q, k, v = AttentionTensorContainer(q.reshape(b, s, n * d)), AttentionTensorContainer(k.reshape(b, s, n * d)), AttentionTensorContainer(v)
         attn_out = optimized_attention(
-            q.reshape(b, s, n * d),
-            k.reshape(b, s, n * d),
+            q,
+            k,
             v,
             heads=self.num_heads,
+            preferred_attention=self.comfy_attention,
             transformer_options=transformer_options,
         )
 

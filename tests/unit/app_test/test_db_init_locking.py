@@ -1,3 +1,4 @@
+import logging
 from importlib.resources import files
 from unittest.mock import Mock
 import os
@@ -108,3 +109,61 @@ def test_setup_database_does_not_start_assets_after_database_failure(monkeypatch
     with pytest.raises(RuntimeError, match="migration failed"):
         main.setup_database(manager)
     manager.startup.assert_not_called()
+
+
+def test_legacy_database_copy_runs_under_file_lock(tmp_path, monkeypatch):
+    legacy_db = tmp_path / "legacy" / "comfyui.db"
+    target_db = tmp_path / "current" / "comfyui.db"
+    legacy_db.parent.mkdir()
+    legacy_db.write_bytes(b"legacy database")
+    copied: list[tuple[str, str]] = []
+    real_copy = db_module.shutil.copy
+
+    def _copy_while_locked(source: str, destination: str):
+        contender = FileLock(str(target_db) + ".lock")
+        try:
+            with pytest.raises(Timeout):
+                contender.acquire(timeout=0)
+        finally:
+            if contender.is_locked:
+                contender.release()
+        copied.append((source, destination))
+        return real_copy(source, destination)
+
+    monkeypatch.setattr(db_module.current_execution_context().configuration, "database_url", None)
+    monkeypatch.setattr(db_module, "get_db_path", lambda: str(target_db))
+    monkeypatch.setattr(
+        db_module, "get_legacy_default_db_path", lambda: str(legacy_db)
+    )
+    monkeypatch.setattr(db_module, "_migrate_and_bind", lambda *_args: None)
+    monkeypatch.setattr(db_module.shutil, "copy", _copy_while_locked)
+    monkeypatch.setattr(db_module, "_db_lock", None)
+
+    try:
+        db_module._init_file_db(f"sqlite:///{target_db}", use_chain_hash=False)
+    finally:
+        if db_module._db_lock is not None:
+            db_module._db_lock.release(force=True)
+
+    assert copied == [(str(legacy_db) + ".bak", str(target_db))]
+
+def test_failed_restore_does_not_mask_the_upgrade_error(stale_db, monkeypatch, caplog):
+    real_backup = db_module._backup_database
+
+    def _upgrade_explodes(*_args, **_kwargs):
+        raise RuntimeError("upgrade exploded")
+
+    def _restore_explodes(source_path, destination_path):
+        if destination_path == stale_db:
+            raise OSError("restore exploded")
+        real_backup(source_path, destination_path)
+
+    monkeypatch.setattr(db_module.command, "upgrade", _upgrade_explodes)
+    monkeypatch.setattr(db_module, "_backup_database", _restore_explodes)
+
+    with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError, match="upgrade exploded"):
+        db_module._init_file_db(f"sqlite:///{stale_db}", use_chain_hash=False)
+
+    backup_path = stale_db + ".bkp"
+    assert os.path.exists(backup_path)
+    assert any(backup_path in record.getMessage() for record in caplog.records)

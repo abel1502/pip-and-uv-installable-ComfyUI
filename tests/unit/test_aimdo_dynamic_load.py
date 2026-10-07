@@ -248,3 +248,37 @@ class TestDynamicStreamingQuality(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBakedPatchesSurviveReload(unittest.TestCase):
+    """A patch baked into a quantized weight (dequantize, patch, requantize) stays baked across
+    dynamic reloads under the same patches; a reload under other patches restores the original."""
+
+    def _patcher(self, uuid):
+        from comfy.model_patcher import ModelPatcherDynamic
+        model = torch.nn.Module()
+        model.lin = torch.nn.Linear(2, 2)
+        model.model_loaded_weight_memory = 0
+        model.current_weight_patches_uuid = "lora"
+        model.dynamic_baked_keys = {"lin.weight"}
+        original = model.lin.weight.detach().clone()
+        baked = torch.nn.Parameter(original + 1, requires_grad=False)
+        model.lin.weight = baked
+        patcher = types.SimpleNamespace(model=model, patches_uuid=uuid, backup={
+            "lin.weight": types.SimpleNamespace(weight=original, inplace_update=False)}, backup_buffers={})
+        return ModelPatcherDynamic.restore_loaded_backups, patcher, original, baked
+
+    def test_a_reload_with_the_same_patches_keeps_the_baked_weight(self):
+        restore, patcher, original, baked = self._patcher("lora")
+        restore(patcher, keep_baked=True)
+        self.assertIs(patcher.model.lin.weight, baked)
+        self.assertEqual(patcher.model.dynamic_baked_keys, {"lin.weight"})
+        self.assertIn("lin.weight", patcher.backup)
+
+    def test_other_patches_or_an_unload_restore_the_original(self):
+        for uuid, keep in (("base", True), ("lora", False)):
+            restore, patcher, original, baked = self._patcher(uuid)
+            restore(patcher, keep_baked=keep)
+            torch.testing.assert_close(patcher.model.lin.weight, original)
+            self.assertEqual(patcher.model.dynamic_baked_keys, set())
+            self.assertEqual(patcher.backup, {})

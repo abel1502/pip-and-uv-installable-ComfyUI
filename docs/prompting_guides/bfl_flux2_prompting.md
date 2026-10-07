@@ -4,6 +4,12 @@ Vendored snapshot from: https://docs.bfl.ml/guides/prompting_guide_flux2
 
 Fetched: 2026-06-03
 
+FLUX.2 [dev] reference sampling (black-forest-labs/flux2 `util.py`) is 50 steps at guidance 4; the
+bundled `image_flux2_text_to_image` template starts at 20 (run it with `--steps 50`). The
+reference encoder pads the chat-templated prompt, system message included, on the left with
+`<pad>` to 512 tokens, and the transformer attends to all 512; the Flux.2 text encoder here does
+the same. Prompts over 512 tokens are not truncated here; the reference truncates them.
+
 ---
 
 > ## Documentation Index

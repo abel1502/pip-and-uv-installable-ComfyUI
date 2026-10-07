@@ -1533,43 +1533,18 @@ fetch failure.
 
 - https://huggingface.co/Comfy-Org/Ideogram-4 — local ComfyUI split model files for `image_ideogram4_t2i` (`ideogram4_fp8_scaled`, `ideogram4_unconditional_fp8_scaled`)
 - https://github.com/Comfy-Org/workflow_templates/blob/main/templates/image_ideogram4_t2i.json — bundled local workflow template; read its `MarkdownNote` before prompting
-- https://github.com/ideogram-oss/ideogram4/blob/main/docs/prompting.md — official Ideogram 4 prompting guide: structured JSON captions, schema/key-order rules, `V4_QUALITY_48`, magic prompt options, 0-1000 bounding boxes, and uppercase hex palettes
-- Prompting guide summary: Ideogram 4 is trained on structured JSON captions. Prefer JSON over plain prose when layout, palette, or text fidelity matters. Include `high_level_description`, `style_description`, `compositional_deconstruction.background`, and `compositional_deconstruction.elements`; keep required key order, use `[y_min, x_min, y_max, x_max]` boxes on a 0-1000 grid, and serialize compact JSON. It uses asymmetric CFG, where the unconditional pass drops text tokens; do not treat it as a normal negative-prompt workflow.
-- Compact JSON schema to use when asking an LLM to build the prompt:
+- https://github.com/ideogram-oss/ideogram4/blob/main/docs/prompting.md — official Ideogram 4 prompting guide: structured JSON captions, schema/key-order rules, `V4_QUALITY_48`, magic prompt options, 0-1000 bounding boxes, and uppercase hex palettes; vendored as `docs/prompting_guides/ideogram4_prompting.md`
+- https://docs.ideogram.ai/using-ideogram/getting-started/prompting-guide/4.-json-prompting-ideogram-4.0 and https://ideogram.ai/blog/ideogram-4-json-prompting/ — Ideogram's own JSON prompting pages; vendored as `ideogram4_docs_json_prompting.md` and `ideogram4_blog_json_prompting.md`. Ideogram 4 is literal: name specific light sources, references and exact colours rather than mood words; keep 5 or fewer elements; include the background colour and a shadow and a highlight colour in `color_palette`.
+- https://github.com/ideogram-oss/ideogram4/blob/main/src/ideogram4/magic_prompt_system_prompts/v1.txt — the open magic-prompt system prompt, vendored as `ideogram4_magic_prompt_system_prompt_v1.md`: one coherent subject is one element with its parts in its `desc` (60-word cap), elements for scattered particles, crowds and other dense, hard-to-enumerate visuals omit `bbox`, `high_level_description` stays under 50 words, the ground is always `background`.
+- Prompting guide summary: Ideogram 4 is trained exclusively on structured JSON captions. Since the guide's 2026-06-30 revision, plain-text prompts "will not work and will likely trigger a safety warning"; expand them to JSON first (magic prompt). Three top-level keys in this order: `high_level_description` (strongly recommended), `style_description` (optional), `compositional_deconstruction` (required: `background`, then `elements`). `style_description` holds exactly one of `photo` or `art_style`, in the order `aesthetics, lighting, photo, medium, color_palette` or `aesthetics, lighting, medium, art_style, color_palette`; `color_palette` is optional, at most 16 uppercase `#RRGGBB`. Elements are `{"type":"obj","bbox","desc","color_palette"}` or `{"type":"text","bbox","text","desc","color_palette"}` in that key order; `bbox` is optional, four integers `[y_min, x_min, y_max, x_max]` on a 0-1000 grid over the image; an element palette holds at most 5 colours. The prompt is limited to 2048 tokens after the Qwen3-VL chat template. Serialize with `separators=(",", ":")` and `ensure_ascii=False`; `CaptionVerifier` (`src/ideogram4/caption_verifier.py`) checks all of this. It uses asymmetric CFG, where the unconditional pass is a separate model run on image tokens only; do not treat it as a normal negative-prompt workflow.
+- Skeleton in canonical order (non-photo branch):
 
 ```json
-{
-  "type": "object",
-  "required": ["summary", "style", "background"],
-  "properties": {
-    "summary": {"type": "string"},
-    "style": {"type": "string"},
-    "background": {"type": "string"},
-    "objects": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["description", "bbox"],
-        "properties": {
-          "text": {"type": "string"},
-          "description": {"type": "string"},
-          "bbox": {
-            "type": "array",
-            "minItems": 4,
-            "maxItems": 4,
-            "items": {"type": "number", "minimum": 0, "maximum": 1000},
-            "description": "[y_min, x_min, y_max, x_max] on a 0-1000 grid"
-          },
-          "palette": {
-            "type": "array",
-            "items": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}
-          }
-        }
-      }
-    }
-  }
-}
+{"high_level_description":"…","style_description":{"aesthetics":"…","lighting":"…","medium":"…","art_style":"…","color_palette":["#RRGGBB"]},"compositional_deconstruction":{"background":"…","elements":[{"type":"obj","bbox":[100,200,900,800],"desc":"…","color_palette":["#RRGGBB"]},{"type":"text","bbox":[20,100,120,900],"text":"…","desc":"…"}]}}
 ```
+
+- Pixel art, measured with `image_ideogram4_t2i` on the Quality preset (`last_steps=3`): `"medium":"illustration"` with `"art_style":"pixel art"` (the open magic prompt's mapping) draws smooth cartoons at 1024. `"medium":"pixel art"` draws pixel art, and an `art_style` that names the sprite's art-pixel size and its rendering (for example `"32x32 pixel art sprite, every art pixel a crisp square block of one flat colour, single-pixel dark outline, nearest-neighbor upscaled, no anti-aliasing, no dithering"`) gives the crispest, coarsest lattice: 50 cells across at 512 and 80 at 1024 for a centred single sprite.
+- **Ideogram 4.5** is API-only (`POST /v2/image/generate/ideogram-4-5`, vendored as `ideogram4_5_api.md`); open weights are announced as coming "soon". It takes natural language or the same Ideogram 4.0 JSON prompt.
 
 **Wan 2.1 / 2.2 / 2.5 / 2.6 (Alibaba Tongyi Wanxiang)**
 

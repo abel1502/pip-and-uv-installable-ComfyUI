@@ -1,15 +1,21 @@
 # https://github.com/jdopensource/JoyAI-Image-Edit (Apache 2.0)
+from typing import Optional
+from typing import Tuple
 import math
-from typing import Optional, Tuple
 
 import comfy_kitchen
 import torch
 import torch.nn as nn
 
+from .. import common_dit
 from ... import ops
 from ... import patcher_extension
-from .. import common_dit
-from ..lightricks.model import GELU_approx, PixArtAlphaTextProjection, TimestepEmbedding, Timesteps
+from ..lightricks.model import GELU_approx
+from ..lightricks.model import PixArtAlphaTextProjection
+from ..lightricks.model import TimestepEmbedding
+from ..lightricks.model import Timesteps
+from ..modules.attention import AttentionTensorContainer
+from ..modules.attention import ComfyAttention
 from ..modules.attention import optimized_attention
 
 
@@ -63,6 +69,7 @@ class JoyImageAttention(nn.Module):
     ):
         super().__init__()
         self.num_attention_heads = num_attention_heads
+        self.comfy_attention = ComfyAttention()
         inner_dim = num_attention_heads * attention_head_dim
 
         self.img_attn_qkv = operations.Linear(dim, inner_dim * 3, bias=True, dtype=dtype, device=device)
@@ -113,12 +120,13 @@ class JoyImageAttention(nn.Module):
         joint_q = torch.cat([img_q, txt_q], dim=1)
         joint_k = torch.cat([img_k, txt_k], dim=1)
         joint_v = torch.cat([img_v, txt_v], dim=1)
+        del img_q, img_k, img_v, txt_q, txt_k, txt_v
 
-        joint_q = joint_q.flatten(2, 3)
-        joint_k = joint_k.flatten(2, 3)
-        joint_v = joint_v.flatten(2, 3)
+        joint_q = AttentionTensorContainer(joint_q.flatten(2, 3))
+        joint_k = AttentionTensorContainer(joint_k.flatten(2, 3))
+        joint_v = AttentionTensorContainer(joint_v.flatten(2, 3))
 
-        joint_out = optimized_attention(joint_q, joint_k, joint_v, heads=heads, transformer_options=transformer_options)
+        joint_out = optimized_attention(joint_q, joint_k, joint_v, heads=heads, preferred_attention=self.comfy_attention, transformer_options=transformer_options)
 
         seq_img = img.shape[1]
         img_out = joint_out[:, :seq_img, :]

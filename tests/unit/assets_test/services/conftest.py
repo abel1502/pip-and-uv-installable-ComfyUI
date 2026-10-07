@@ -7,6 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy import event
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import Session as SASession
+from sqlalchemy.orm import sessionmaker
 import pytest
 
 from comfy.app.assets import mode
@@ -68,6 +69,7 @@ def mock_create_session(db_engine):
             yield sess
 
     with patch("comfy.app.assets.services.ingest.create_session", _create_session), \
+         patch("comfy.app.database.db.WriteSession", sessionmaker(bind=db_engine)), \
          patch("comfy.app.assets.services.asset_management.create_session", _create_session), \
          patch("comfy.app.assets.services.tagging.create_session", _create_session):
         yield _create_session

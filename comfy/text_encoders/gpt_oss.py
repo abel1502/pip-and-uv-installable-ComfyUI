@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
-from typing import Any, List, Optional, Sequence
+from typing import Any
+from typing import List
+from typing import Optional
+from typing import Sequence
+import math
 
 import torch
 import torch.nn as nn
@@ -13,7 +16,9 @@ import torch.nn.functional as F
 from .. import ops as ops_module
 from .. import sd1_clip
 from ..ldm.modules.attention import optimized_attention_for_device
-from .llama import RMSNorm, apply_rope
+from .llama import RMSNorm
+from .llama import apply_rope
+from .llama import moe_experts_forward
 
 
 @dataclass
@@ -205,32 +210,7 @@ class GptOssExperts(nn.Module):
         return torch.addcmul(glu, up, glu)
 
     def forward(self, hidden_states: torch.Tensor, router_indices: torch.Tensor, routing_weights: torch.Tensor) -> torch.Tensor:
-        N = hidden_states.shape[0]
-        top_k = router_indices.shape[-1]
-        H = hidden_states.shape[-1]
-
-        per_pair = torch.zeros((N * top_k, H), dtype=hidden_states.dtype, device=hidden_states.device)
-
-        expert_mask = F.one_hot(router_indices, num_classes=self.num_experts).permute(2, 1, 0)
-        expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
-
-        with self.gate_up_proj.bank_resident(hidden_states) as gate_up_bank, \
-             self.down_proj.bank_resident(hidden_states) as down_bank:
-            for ei in expert_hit:
-                expert_idx = int(ei.item())
-                top_k_pos, token_idx = torch.where(expert_mask[expert_idx])
-                current = hidden_states[token_idx]
-
-                gate_up = gate_up_bank.expert_linear(current, expert_idx)
-                gated = self._apply_gate(gate_up)
-                expert_out = down_bank.expert_linear(gated, expert_idx)
-
-                weighted = expert_out * routing_weights[token_idx, top_k_pos, None]
-
-                flat_idx = token_idx * top_k + top_k_pos
-                per_pair[flat_idx] = weighted.to(per_pair.dtype)
-
-        return per_pair.view(N, top_k, H).sum(dim=1)
+        return moe_experts_forward(hidden_states, router_indices, routing_weights, self.num_experts, self.gate_up_proj, self.down_proj, self._apply_gate)
 
 
 class GptOssMLP(nn.Module):

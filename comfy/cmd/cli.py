@@ -247,6 +247,8 @@ _MEMORY_OPTS: list[tuple] = [
     ("force_non_blocking", bool, typer.Option(False, "--force-non-blocking/--no-force-non-blocking", help="Force non-blocking operations for all applicable tensors.")),
     ("disable_smart_memory", bool, typer.Option(False, "--disable-smart-memory", help="Disable smart memory management.")),
     ("disable_pinned_memory", bool, typer.Option(False, "--disable-pinned-memory", help="Disable pinned memory use.")),
+    ("pinned_memory_reserve", Optional[float], typer.Option(None, "--pinned-memory-reserve", help="GB of the effective memory limit (host RAM, or the cgroup limit in a container) that pinned memory always leaves free, checked against memory available at each pin. Default: the larger of 4 GB and 10% of the limit.")),
+    ("max_pinned_memory", Optional[float], typer.Option(None, "--max-pinned-memory", help="Cap in GB on pinned host memory. Default and upper bound: the effective memory limit minus --pinned-memory-reserve.")),
 ]
 
 _CACHE_OPTS: list[tuple] = [

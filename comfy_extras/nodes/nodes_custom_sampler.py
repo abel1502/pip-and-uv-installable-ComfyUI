@@ -1151,7 +1151,7 @@ class CFGOverride(io.ComfyNode):
         return io.Schema(
             node_id="CFGOverride",
             display_name="CFG Override",
-            description="Override cfg to a fixed value over a [start, end] percent (sigma) range. "
+            description="Override cfg to a fixed value over a [start, end] percent (sigma) range, or over the last N steps. "
                         "With multiple overrides, the one nearest the sampler wins on overlap.",
             category="model/sampling/guiders",
             inputs=[
@@ -1159,19 +1159,28 @@ class CFGOverride(io.ComfyNode):
                 io.Float.Input("cfg", default=1.0, min=0.0, max=100.0, step=0.1, round=0.01),
                 io.Float.Input("start_percent", default=0.0, min=0.0, max=1.0, step=0.001),
                 io.Float.Input("end_percent", default=1.0, min=0.0, max=1.0, step=0.001),
+                io.Int.Input("last_steps", default=0, min=0, max=10000, optional=True,
+                             tooltip="Above 0, override the last N steps of the schedule instead of the percent range. "
+                                     "Ideogram 4's presets run their last 3 (Quality), 2 (Default) or 1 (Turbo) steps at cfg 3."),
             ],
             outputs=[io.Model.Output()],
         )
 
     @classmethod
-    def execute(cls, model, cfg, start_percent, end_percent) -> io.NodeOutput:
+    def execute(cls, model, cfg, start_percent, end_percent, last_steps=0) -> io.NodeOutput:
         ms = model.get_model_object("model_sampling")
         sigma_hi = ms.percent_to_sigma(start_percent)  # percent->sigma decreasing, so hi >= lo
         sigma_lo = ms.percent_to_sigma(end_percent)
 
         def predict_noise_wrapper(executor, *args, **kwargs):
             sigma = float(args[1].flatten()[0])        # args = (x, timestep, model_options, seed)
-            if not (sigma_lo <= sigma <= sigma_hi):
+            if last_steps > 0:
+                # the last N steps start at sample_sigmas[-1 - N]
+                sample_sigmas = args[2]["transformer_options"]["sample_sigmas"]
+                in_range = sigma <= float(sample_sigmas[max(len(sample_sigmas) - 1 - last_steps, 0)])
+            else:
+                in_range = sigma_lo <= sigma <= sigma_hi
+            if not in_range:
                 return executor(*args, **kwargs)
             guider = executor.class_obj                # guider.cfg feeds cond_scale
             saved = guider.cfg

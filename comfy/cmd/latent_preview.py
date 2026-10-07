@@ -1,22 +1,23 @@
 from __future__ import annotations
 
-import logging
 from typing import Optional
+import logging
 
-import torch
 from PIL import Image
+import torch
 
+from . import folder_paths
 from .. import model_management
 from .. import model_prefetch
 from .. import utils
 from ..cli_args import args
 from ..cli_args_types import LatentPreviewMethod
-from ..cmd import folder_paths
 from ..component_model.executor_types import UnencodedPreviewImageMessage
 from ..execution_context import current_execution_context
-from ..model_downloader import get_or_download, KNOWN_APPROX_VAES
-from ..taesd.taesd import TAESD
+from ..model_downloader import KNOWN_APPROX_VAES
+from ..model_downloader import get_or_download
 from ..sd import VAE
+from ..taesd.taesd import TAESD
 from ..utils import load_torch_file
 
 # todo: should not have been introduced
@@ -60,7 +61,8 @@ class TAESDPreviewerImpl(LatentPreviewer):
         self.taesd = taesd
 
     def decode_latent_to_preview(self, x0) -> bytes:
-        x_sample = self.taesd.decode(x0[:1])[0].movedim(0, 2)
+        # RGB only: previews are JPEG
+        x_sample = self.taesd.decode(x0[:1])[0, :3].movedim(0, 2)
         return preview_to_image(x_sample)
 
 

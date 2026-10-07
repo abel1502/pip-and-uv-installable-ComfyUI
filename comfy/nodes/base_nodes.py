@@ -24,6 +24,7 @@ from .. import controlnet
 from .. import diffusers_load
 from .. import model_management
 from .. import node_helpers
+from .. import latent_formats
 from .. import sample
 from .. import samplers
 from .. import sd
@@ -332,6 +333,9 @@ class ConditioningZeroOut:
             conditioning_scale = d.get("conditioning_scale", None)
             if conditioning_scale is not None:
                 d["conditioning_scale"] = torch.zeros_like(conditioning_scale)
+            direct_context = d.get("direct_context", None)
+            if direct_context is not None:
+                d["direct_context"] = torch.zeros_like(direct_context)
             n = [torch.zeros_like(t[0]), d]
             c.append(n)
         return (c,)
@@ -848,7 +852,7 @@ class LoraLoaderModelOnly(LoraLoader):
 
 class VAELoader:
     video_taes = ["taehv", "lighttaew2_2", "lighttaew2_1", "lighttaehy1_5", "taeltx_2", "taeh3"]
-    image_taes = ["taesd", "taesdxl", "taesd3", "taef1", "taef2"]
+    image_taes = ["taesd", "taesdxl", "taesd3", "taef1", "taef2", "taeqi2_1"]
 
     @staticmethod
     def vae_list(s=None):
@@ -857,7 +861,7 @@ class VAELoader:
         have_img_encoder, have_img_decoder = set(), set()
 
         for v in approx_vaes:
-            parts = v.split("_", 1)
+            parts = v.rsplit("_", 1)
             if len(parts) != 2 or parts[0] not in VAELoader.image_taes:
                 for tae in VAELoader.video_taes:
                     if v.startswith(tae):
@@ -900,6 +904,10 @@ class VAELoader:
         elif name == "taef1":
             sd_["vae_scale"] = torch.tensor(0.3611)
             sd_["vae_shift"] = torch.tensor(0.1159)
+        elif name == "taeqi2_1":
+            latent_format = latent_formats.QwenImage21()
+            sd["vae_scale"] = 1.0 / latent_format.latents_std[0]
+            sd["vae_shift"] = latent_format.latents_mean[0]
         return sd_
 
     @classmethod

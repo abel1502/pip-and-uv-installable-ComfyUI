@@ -9,6 +9,7 @@ import sys
 import time
 import types
 from contextlib import contextmanager, nullcontext
+from functools import wraps
 from os.path import join, basename, dirname, isdir, isfile, exists, abspath, split, splitext, realpath
 from typing import Iterable, Any, Generator
 from unittest.mock import patch
@@ -64,12 +65,20 @@ class StreamToLogger:
     def __init__(self, logger: logging.Logger, log_level=logging.INFO):
         self.logger = logger
         self.log_level = log_level
+        self.original_stdout = sys.stdout
+        self._writing = False
 
     def write(self, buf):
-        # Process each line from the buffer. Print statements usually end with a newline.
-        for line in buf.rstrip().splitlines():
-            # Log the line, removing any trailing whitespace
-            self.logger.log(self.log_level, line.rstrip())
+        # A custom node may bind its own logging handler to this stream.
+        if self._writing:
+            self.original_stdout.write(buf)
+            return
+        self._writing = True
+        try:
+            for line in buf.rstrip().splitlines():
+                self.logger.log(self.log_level, line.rstrip())
+        finally:
+            self._writing = False
 
     def flush(self):
         # The logger handles its own flushing, so this can be a no-op.
@@ -253,12 +262,35 @@ _MODEL_NAME_TO_HF_REPO: dict[str, str] = {
 def _apply_post_import_patches(module_name: str) -> None:
     """Apply patches to custom-node submodules after they finish importing.
 
-    These patches fix cases where custom nodes construct local model paths
-    that may not exist, instead of using HuggingFace repo IDs that
-    ``from_pretrained`` can resolve and cache automatically.
+    Adapt dependency API moves and resolve custom-node model paths through
+    the shared download infrastructure.
     """
+    _patch_essentials_pixeloe(module_name)
     _patch_segformer_model_resolution(module_name)
     _install_deferred_controlnet_patches(module_name)
+
+
+def _patch_essentials_pixeloe(module_name: str) -> None:
+    if module_name.lower() != "comfyui_essentials":
+        return
+    node = sys.modules[module_name].NODE_CLASS_MAPPINGS.get("PixelOEPixelize+")
+    if node is None:
+        return
+    original_execute = node.execute
+
+    @wraps(original_execute)
+    def execute(self, *args, **kwargs):
+        # Essentials still imports the original NumPy implementation from its
+        # old path. PixelOE now ships that same API under legacy.pixelize.
+        try:
+            importlib.import_module("pixeloe.pixelize")
+        except ModuleNotFoundError as exc:
+            if exc.name != "pixeloe.pixelize":
+                raise
+            sys.modules["pixeloe.pixelize"] = importlib.import_module("pixeloe.legacy.pixelize")
+        return original_execute(self, *args, **kwargs)
+
+    node.execute = execute
 
 
 def _patch_segformer_model_resolution(module_name: str) -> None:
@@ -508,6 +540,25 @@ def _register_packages_from_directory(directory: str) -> None:
 
 
 @contextmanager
+def _prepare_pixeloe_import(module: types.ModuleType, module_path: str, block_installation: bool):
+    # PixelOE vendors its library under src. Its obsolete pkg_resources
+    # installer is unnecessary when that library is already bundled, including
+    # normal CLI startup where runtime installation is allowed.
+    sys.path.insert(0, join(module_path, "src"))
+    if not block_installation and not isdir(join(module_path, "src")):
+        yield
+        return
+    name = f"{module.__name__}.nodes.installer"
+    installer = types.ModuleType(name)
+    installer.install_pixeloe = lambda: None
+    sys.modules[name] = installer
+    try:
+        yield
+    finally:
+        sys.modules.pop(name, None)
+
+
+@contextmanager
 def _exec_mitigations(module: types.ModuleType, module_path: str) -> Generator[ExportedNodes, Any, None]:
     config = current_execution_context()
     block_installation = config and config.configuration and config.configuration.block_runtime_package_installation
@@ -526,6 +577,7 @@ def _exec_mitigations(module: types.ModuleType, module_path: str) -> Generator[E
         patch_pip_install_popen() if block_installation else nullcontext(),
         # sys.path protection — prevent custom nodes from polluting the path
         _protect_sys_path(),
+        _prepare_pixeloe_import(module, module_path, block_installation) if basename(module_path).lower() == "pixeloe" else nullcontext(),
     ):
         if needs_file_mitigation:
             from ..cmd import folder_paths
@@ -607,8 +659,8 @@ def _vanilla_load_custom_nodes_1(module_path, ignore: set = None) -> ExportedNod
                 for name, display_name in module.NODE_DISPLAY_NAME_MAPPINGS.items():
                     if name not in ignore:
                         exported_nodes.NODE_DISPLAY_NAME_MAPPINGS[name] = display_name
-        else:
-            logger.error(f"Skip {module_path} module for custom nodes due to the lack of NODE_CLASS_MAPPINGS.")
+        elif not callable(getattr(module, "comfy_entrypoint", None)):
+            logger.error(f"Skip {module_path} module for custom nodes: no NODE_CLASS_MAPPINGS or callable comfy_entrypoint.")
 
         exported_nodes.update(_comfy_entrypoint_upstream_v3_imports(module, ignore=ignore))
     except Exception as e:

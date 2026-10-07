@@ -289,6 +289,11 @@ def create_block_external_middleware():
 class PromptServer(ExecutorToClientProgress):
     instance: Optional['PromptServer'] = None
 
+    def _get_server_features(self):
+        features = feature_flags.get_server_features()
+        features["assets"] = self.asset_manager.enabled
+        return features
+
     def __init__(self, loop, asset_manager: "AssetManager | None" = None):
         server_args = current_execution_context().configuration
         # todo: this really needs to be set up differently, because sometimes the prompt server will not be initialized
@@ -394,7 +399,7 @@ class PromptServer(ExecutorToClientProgress):
                                 # Send server feature flags in response
                                 await self.send(
                                     "feature_flags",
-                                    feature_flags.get_server_features(),
+                                    self._get_server_features(),
                                     sid,
                                 )
 
@@ -801,7 +806,7 @@ class PromptServer(ExecutorToClientProgress):
 
         @routes.get("/features")
         async def get_features(request):
-            features = feature_flags.get_server_features()
+            features = self._get_server_features()
             overrides = get_environment_overrides()
             if overrides:
                 features.update(overrides)
@@ -1513,7 +1518,7 @@ class PromptServer(ExecutorToClientProgress):
         # support it
         from ..nodes.vanilla_node_importing import prompt_server_instance_routes
         for route in prompt_server_instance_routes.routes:
-            self.routes.route(route.method, route.path)(route.handler)
+            self.routes.route(route.method, route.path)(route.func)
         prompt_server_instance_routes.clear()
 
         self.user_manager.add_routes(self.routes)

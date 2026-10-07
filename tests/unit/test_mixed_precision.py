@@ -271,6 +271,47 @@ class TestMixedPrecisionOps(unittest.TestCase):
         self.assertEqual(model.layer.weight_function, [])
 
     @unittest.skipUnless(ops.mixed_precision_quantization_available(), "requires comfy_kitchen-backed quantized tensors")
+    def test_lora_patch_on_int8_convrot_layer_changes_its_output_by_the_lora(self):
+        """A LoRA on an INT8 ConvRot layer bakes into the requantized weight: the layer's output moves
+        by the LoRA's x @ (up @ down)^T, to within one requantization of the weight."""
+        from comfy.model_patcher import ModelPatcher
+
+        torch.manual_seed(0)
+        layer = ops.mixed_precision_ops({}, compute_dtype=torch.bfloat16).Linear(256, 64, device="cpu", dtype=torch.bfloat16)
+        layer.load_state_dict({
+            "weight": torch.randint(-127, 128, (64, 256), dtype=torch.int8),
+            "weight_scale": torch.full((64, 1), 0.01, dtype=torch.float32),
+            "bias": torch.zeros(64, dtype=torch.bfloat16),
+            "comfy_quant": torch.tensor(list(json.dumps(
+                {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": 256}).encode("utf-8")), dtype=torch.uint8),
+        }, strict=False)
+
+        class Model(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.layer = layer
+
+        model = Model()
+        x = torch.randn(8, 256, dtype=torch.bfloat16)
+        with torch.inference_mode():
+            before = model.layer(x).float()
+        # a LoRA several quantization steps (0.01) large; one requantization is about half a step
+        up = torch.randn(64, 4) * 0.2
+        down = torch.randn(4, 256) * 0.2
+        patcher = ModelPatcher(model, torch.device("cpu"), torch.device("cpu"))
+        from comfy import lora as comfy_lora
+        patcher.add_patches(comfy_lora.load_lora({"layer.lora_up.weight": up, "layer.lora_down.weight": down},
+                                                 {"layer": "layer.weight"}))
+
+        patcher.patch_weight_to_device("layer.weight", device_to=torch.device("cpu"))
+
+        self.assertIsInstance(model.layer.weight, QuantizedTensor)
+        with torch.inference_mode():
+            after = model.layer(x).float()
+        lora = x.float() @ (up @ down).T
+        self.assertLess(float((after - before - lora).norm() / lora.norm()), 0.1)
+
+    @unittest.skipUnless(ops.mixed_precision_quantization_available(), "requires comfy_kitchen-backed quantized tensors")
     def test_disabled_fp8_compute_preserves_scaled_quantized_weight(self):
         """Disabled fp8 kernels must still dequantize with the stored scale."""
         for quant_format, weight_dtype in (

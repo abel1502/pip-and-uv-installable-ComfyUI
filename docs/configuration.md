@@ -41,6 +41,19 @@ other workloads. `--novram` is an explicit compatibility escape hatch, not the
 normal recommendation; DynamicVRAM can eject dependencies when memory is
 needed and works across pipeline stages.
 
+Pinned host memory cannot be reclaimed, so it has one budget, shared by the
+DynamicVRAM host buffers and the legacy model patcher. The effective memory
+limit is host RAM or, in a container or systemd scope, the lowest cgroup
+`memory.max`, `memory.high`, or v1 `memory.limit_in_bytes` of the process's
+cgroup and its ancestors. Pinning never takes the reserve,
+`--pinned-memory-reserve` GB (default: the larger of 4 GB and 10% of the
+limit). The reserve is checked at every pin against memory available at that
+moment: `MemAvailable`, capped by each limited cgroup's limit minus its working
+set, so memory held by other processes, VMs, or the rest of a pod counts. When
+a pin does not fit, idle pins are evicted first; otherwise the weights are used
+unpinned. `--max-pinned-memory` caps the total below the limit minus the
+reserve.
+
 ## Distributed configuration
 
 The model-parallel flags are ordinary configuration values:

@@ -1342,7 +1342,7 @@ def _get_sg_widget_positional(sg_def, boundary_name, wv):
         if link.src_node != _SUBGRAPH_INPUT_NODE_ID:
             continue
         slot = link.src_slot
-        if slot in slot_is_widget:
+        if slot_is_widget.get(slot, False):
             continue
         target_node = inner_nodes_by_id.get(link.dst_node)
         if target_node is None:

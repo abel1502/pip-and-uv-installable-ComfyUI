@@ -1,26 +1,39 @@
-import dataclasses
-import threading
-from collections.abc import Callable, Generator, Iterator
-from contextlib import AbstractContextManager, contextmanager
+from collections.abc import Callable
+from collections.abc import Generator
+from collections.abc import Iterator
+from contextlib import AbstractContextManager
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Protocol
-from unittest.mock import MagicMock, Mock, call
+from unittest.mock import MagicMock
+from unittest.mock import Mock
+from unittest.mock import call
+import dataclasses
+import threading
 
 from comfy.cmd import folder_paths
-import pytest
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session, Session as SASession
+from sqlalchemy import create_engine
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session as SASession
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+import pytest
 
 from comfy.app.assets import lifecycle
 from comfy.app.assets import manager as manager_module
-from comfy.app.assets import scanner, seeder as seeder_module
-from comfy.app.assets.database.models import Asset, AssetContent
-from comfy.app.assets.database.queries.records import create_content, create_record
+from comfy.app.assets import scanner
+from comfy.app.assets import seeder as seeder_module
+from comfy.app.assets.database.models import Asset
+from comfy.app.assets.database.models import AssetContent
+from comfy.app.assets.database.queries.records import create_content
+from comfy.app.assets.database.queries.records import create_record
 from comfy.app.assets.manager import AssetsEnabled
-from comfy.app.assets.seeder import ScanStatus, asset_seeder
+from comfy.app.assets.seeder import ScanStatus
+from comfy.app.assets.seeder import asset_seeder
+from comfy.app.assets.services.schemas import RegisteredAsset
+from comfy.app.assets.services.schemas import UploadAssetView
 from comfy.app.database.models import Base
-from comfy.app.assets.services.schemas import RegisteredAsset, UploadAssetView
 
 
 class _ArgsStub:
@@ -76,6 +89,7 @@ def threaded_create_session(
     monkeypatch.setattr(seeder_module, "create_session", _create_session)
     monkeypatch.setattr(scanner, "create_session", _create_session)
     monkeypatch.setattr("comfy.app.assets.services.ingest.create_session", _create_session)
+    monkeypatch.setattr("comfy.app.database.db.WriteSession", sessionmaker(bind=engine))
     yield _create_session
     engine.dispose()
 

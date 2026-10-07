@@ -2,9 +2,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ... import patcher_extension, utils
+from ... import patcher_extension
+from ... import utils
 from ..common_dit import pad_to_patch_size
 from ..flux.math import apply_rope1
+from ..modules.attention import AttentionTensorContainer
+from ..modules.attention import ComfyAttention
 from ..modules.attention import optimized_attention
 from ..modules.diffusionmodules.mmdit import TimestepEmbedder
 
@@ -189,6 +192,7 @@ class MLP(nn.Module):
 class Attention(nn.Module):
     def __init__(self, device=None, dtype=None, operations=None):
         super().__init__()
+        self.comfy_attention = ComfyAttention()
         self.q_proj = operations.Linear(
             HIDDEN_SIZE, NUM_HEADS * HEAD_DIM, bias=False, device=device, dtype=dtype
         )
@@ -287,15 +291,16 @@ class Attention(nn.Module):
         self, hidden_states, rope, attention_mask, transformer_options
     ):
         query, key, value = self._project(hidden_states, rope, False)
+        query = AttentionTensorContainer(query)
         output = optimized_attention(
             query,
-            key,
-            value,
+            AttentionTensorContainer(key),
+            AttentionTensorContainer(value),
             NUM_HEADS,
             mask=attention_mask,
             skip_reshape=True,
             transformer_options=transformer_options,
-            enable_gqa=True,
+            enable_gqa=True, preferred_attention=self.comfy_attention,
         )
         return self.o_proj(output), key, value
 
@@ -305,6 +310,7 @@ class Attention(nn.Module):
         query, key, value = self._project(hidden_states, rope, True)
         key = torch.cat((prefix_key, key), dim=2)
         value = torch.cat((prefix_value, value), dim=2)
+        query, key, value = AttentionTensorContainer(query), AttentionTensorContainer(key), AttentionTensorContainer(value)
         output = optimized_attention(
             query,
             key,
@@ -313,7 +319,7 @@ class Attention(nn.Module):
             mask=None,
             skip_reshape=True,
             transformer_options=transformer_options,
-            enable_gqa=True,
+            enable_gqa=True, preferred_attention=self.comfy_attention,
         )
         return self.o_proj_mot_gen(output)
 

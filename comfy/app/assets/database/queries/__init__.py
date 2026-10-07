@@ -12,6 +12,7 @@ from .records import create_record
 from .records import delete_record
 from .records import fetch_record_tags
 from .records import get_record_by_id
+from .records import is_live_path_conflict
 from .records import list_records_page
 from .records import mark_content_missing
 from .records import rename_record
@@ -25,6 +26,7 @@ __all__ = [
     "delete_record",
     "fetch_record_tags",
     "get_record_by_id",
+    "is_live_path_conflict",
     "list_records_page",
     "mark_content_missing",
     "rename_record",

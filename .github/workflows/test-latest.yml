@@ -12,7 +12,7 @@ concurrency:
 jobs:
   full:
     if: github.ref_name == 'develop'
-    name: Full suite — Python 3.14 PyTorch 2.13 CPU
+    name: Full suite — Arch Python / PyTorch 2.14 CPU
     runs-on: ubuntu-latest
     timeout-minutes: 30
     container:
@@ -31,16 +31,28 @@ jobs:
           restore-keys: uv-linux-py314-
       - name: Install locked dependencies
         run: |
-          uv venv --python 3.14 .venv
+          uv venv --python /usr/bin/python --no-python-downloads .venv
           ci/install-locked.sh ci/locks/pylock.linux-py314-cpu.toml .venv/bin/python
       - name: Environment info
         run: |
-          .venv/bin/python --version
-          .venv/bin/python -c "import torch; print('torch', torch.__version__); assert torch.__version__.startswith('2.13.0'); assert not torch.cuda.is_available()"
+          pacman -Q python
+          .venv/bin/python - <<'PY'
+          import platform
+          import subprocess
+          import sys
+          assert platform.freedesktop_os_release()['ID'] == 'arch'
+          system_version = subprocess.check_output(['/usr/bin/python', '-c', 'import platform; print(platform.python_version())'], text=True).strip()
+          assert platform.python_version() == system_version
+          assert sys.base_prefix == '/usr'
+          print('Arch Python', system_version, 'using', sys.executable)
+          PY
+          .venv/bin/python -c "import torch; print('torch', torch.__version__); assert torch.__version__.startswith('2.14.0'); assert not torch.cuda.is_available()"
       - name: Lint
         run: |
           .venv/bin/python -m ruff check comfy/ comfy_extras/ comfy_api/ comfy_api_nodes/ comfy_compatibility/ comfy_execution/
           .venv/bin/python -m pylint --disable=W4902 comfy/ comfy_extras/ comfy_api/ comfy_api_nodes/ comfy_compatibility/ comfy_execution/
+      - name: Custom-node registration
+        run: .venv/bin/python -m pytest -v -s --timeout=900 tests/custom_nodes/test_installed_node_registration.py
       - name: Unit tests
         env:
           COMFYUI_UNIT_DISABLE_CUSTOM_NODES: "1"

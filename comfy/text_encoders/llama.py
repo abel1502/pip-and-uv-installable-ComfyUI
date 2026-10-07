@@ -156,6 +156,9 @@ class Mistral3Small24BConfig:
     rope_scale = None
     final_norm: bool = True
     lm_head: bool = False
+    # Flux.2's reference encoder runs left-padded prompts through transformers' SDPA attention, which gives a query
+    # with no key to attend to (a left pad) a zero attention output
+    zero_unattended_queries: bool = True
 
 
 @dataclass
@@ -586,6 +589,28 @@ def precompute_freqs_cis(head_dim, position_ids, theta, rope_scale=None, rope_di
 
     return out
 
+def moe_experts_forward(x, topk_idx, topk_weight, num_experts, gate_up_proj, down_proj, activation):
+    num_tokens, top_k = topk_idx.shape
+    # group the (token, slot) assignments by expert: one host sync per call instead of two per expert
+    order = torch.argsort(topk_idx.reshape(-1))
+    counts = torch.bincount(topk_idx.reshape(-1), minlength=num_experts).tolist()
+    sorted_x = x[order // top_k]
+    weight = topk_weight.reshape(-1)[order].unsqueeze(1)
+    sorted_out = torch.empty_like(sorted_x)
+
+    start = 0
+    with gate_up_proj.bank_resident(x) as gate_up_bank, down_proj.bank_resident(x) as down_bank:
+        for expert_idx, n in enumerate(counts):
+            if n == 0:
+                continue
+            gated = activation(gate_up_bank.expert_linear(sorted_x[start:start + n], expert_idx))
+            sorted_out[start:start + n] = (down_bank.expert_linear(gated, expert_idx) * weight[start:start + n]).to(sorted_out.dtype)
+            start += n
+
+    out = torch.empty_like(sorted_out)
+    out[order] = sorted_out
+    return out.view(num_tokens, top_k, -1).sum(dim=1)
+
 
 def rope_matrix(freqs_cis):
     if torch.is_tensor(freqs_cis):
@@ -652,6 +677,7 @@ class Attention(nn.Module):
             optimized_attention=None,
             past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
             sliding_window: Optional[int] = None,
+            attended: Optional[torch.Tensor] = None,
     ):
         batch_size, seq_length, _ = hidden_states.shape
 
@@ -728,6 +754,8 @@ class Attention(nn.Module):
 
         gqa_kwargs = {"enable_gqa": True} if self.num_heads != self.num_kv_heads else {}
         output = optimized_attention(xq, xk, xv, self.num_heads, mask=attention_mask, skip_reshape=True, **gqa_kwargs)
+        if attended is not None:
+            output = output * attended
         return self.o_proj(output), present_key_value
 
 
@@ -774,6 +802,7 @@ class TransformerBlock(nn.Module):
             freqs_cis: Optional[torch.Tensor] = None,
             optimized_attention=None,
             past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+            attended: Optional[torch.Tensor] = None,
     ):
         output = x
         # Self Attention
@@ -785,6 +814,7 @@ class TransformerBlock(nn.Module):
             freqs_cis=freqs_cis,
             optimized_attention=optimized_attention,
             past_key_value=past_key_value,
+            attended=attended,
         )
         x = residual + x
 
@@ -821,6 +851,7 @@ class TransformerBlockGemma2(nn.Module):
             freqs_cis: Optional[torch.Tensor] = None,
             optimized_attention=None,
             past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+            attended: Optional[torch.Tensor] = None,
     ):
         output = x
         sliding_window = None
@@ -848,6 +879,7 @@ class TransformerBlockGemma2(nn.Module):
             optimized_attention=optimized_attention,
             past_key_value=past_key_value,
             sliding_window=sliding_window,
+            attended=attended,
         )
 
         x = self.post_attention_layernorm(x)
@@ -879,6 +911,7 @@ class Llama2_(nn.Module):
         self.fixed_kv = getattr(config, "fixed_kv", False)
         self.graph_dynamic_vbar_blocks = getattr(config, "graph_dynamic_vbar_blocks", False)
         self.prefetch_dynamic_vbars = getattr(config, "prefetch_dynamic_vbars", False)
+        self.zero_unattended_queries = getattr(config, "zero_unattended_queries", False)
         self.vocab_size = config.vocab_size
 
         if self.config.transformer_type == "gemma2" or self.config.transformer_type == "gemma3":
@@ -972,6 +1005,11 @@ class Llama2_(nn.Module):
             else:
                 mask = causal_mask
 
+        attended = None
+        if self.zero_unattended_queries and attention_mask is not None and past_len == 0:
+            # a causal query has a key to attend to from the first unmasked position on
+            attended = (attention_mask.cumsum(dim=-1) > 0).unsqueeze(-1).to(x.dtype)
+
         optimized_attention = optimized_attention_for_device(x.device, mask=mask is not None, small_input=True)
 
         enable_graph = self.graph_dynamic_vbar_blocks and (fixed_kv_decode or spec_decode)
@@ -1020,6 +1058,7 @@ class Llama2_(nn.Module):
                     freqs_cis=freqs_cis,
                     optimized_attention=optimized_attention,
                     past_key_value=past_kv,
+                    attended=attended,
                 )
                 if enable_graph:
                     x.copy_(output)
@@ -1047,10 +1086,16 @@ class Llama2_(nn.Module):
             malloc_scope="block"
         )
 
+        # a listed tap of the last layer is its raw output unless normed intermediates were asked for; "all" ends
+        # with the normed state, as transformers' hidden_states does
+        raw_last_tap = only_layers is not None and (i + 1) in only_layers and not final_layer_norm_intermediate
+        if raw_last_tap:
+            all_intermediate.append(x.unsqueeze(1).clone())
+
         if self.norm is not None:
             x = self.norm(x)
 
-        if all_intermediate is not None:
+        if all_intermediate is not None and not raw_last_tap:
             if only_layers is None or ((i + 1) in only_layers):
                 all_intermediate.append(x.unsqueeze(1).clone())
 

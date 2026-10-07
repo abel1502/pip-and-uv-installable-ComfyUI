@@ -1,21 +1,21 @@
 """Tests for path_utils – asset category resolution."""
-import os
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
+import os
+import tempfile
 
 import pytest
 
-from comfy.app.assets.services.path_utils import (
-    compute_display_name,
-    compute_loader_path,
-    compute_logical_path,
-    get_asset_category_and_relative_path,
-    get_known_input_subfolder_tags_from_path,
-    get_known_subfolder_tags,
-    get_name_and_tags_from_asset_path,
-    resolve_destination_from_tags,
-)
+from comfy.app.assets.helpers import cached_prefix_matcher
+from comfy.app.assets.services.path_utils import compute_display_name
+from comfy.app.assets.services.path_utils import compute_loader_path
+from comfy.app.assets.services.path_utils import compute_logical_path
+from comfy.app.assets.services.path_utils import get_asset_category_and_relative_path
+from comfy.app.assets.services.path_utils import get_backend_system_tags_from_path
+from comfy.app.assets.services.path_utils import get_known_input_subfolder_tags_from_path
+from comfy.app.assets.services.path_utils import get_known_subfolder_tags
+from comfy.app.assets.services.path_utils import get_name_and_tags_from_asset_path
+from comfy.app.assets.services.path_utils import resolve_destination_from_tags
 
 
 @pytest.fixture
@@ -623,3 +623,35 @@ class TestResolveDestinationFromTags:
                         resolve_destination_from_tags(
                             ["models", f"model_type:{folder_name}"]
                         )
+
+
+class TestCachedPrefixMatchers:
+    def test_unchanged_config_reuses_matchers_across_files(self, fake_dirs):
+        files = [fake_dirs["output"] / f"f{i}.png" for i in range(5)]
+        assert get_backend_system_tags_from_path(str(files[0])) == ["output"]
+        hits = cached_prefix_matcher.cache_info().hits
+
+        for f in files[1:]:
+            assert get_backend_system_tags_from_path(str(f)) == ["output"]
+
+        # input, output, temp and the checkpoints category, per file.
+        assert cached_prefix_matcher.cache_info().hits - hits >= 4 * 4
+
+    def test_changed_folder_config_builds_a_correct_new_matcher(self, fake_dirs, tmp_path):
+        old = fake_dirs["output"] / "old.png"
+        assert get_backend_system_tags_from_path(str(old)) == ["output"]
+        moved = tmp_path / "moved-output"
+        moved.mkdir()
+        new = moved / "new.png"
+
+        with patch("comfy.app.assets.services.path_utils.folder_paths") as mock_fp:
+            mock_fp.get_input_directory.return_value = str(fake_dirs["input"])
+            mock_fp.get_output_directory.return_value = str(moved)
+            mock_fp.get_temp_directory.return_value = str(fake_dirs["temp"])
+            misses = cached_prefix_matcher.cache_info().misses
+
+            assert get_backend_system_tags_from_path(str(new)) == ["output"]
+            with pytest.raises(ValueError):
+                get_backend_system_tags_from_path(str(old))
+
+        assert cached_prefix_matcher.cache_info().misses > misses

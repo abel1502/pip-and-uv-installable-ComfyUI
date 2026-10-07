@@ -75,6 +75,25 @@ def test_v2_private_namespace_root_limit(cgroup):
     assert system_memory.virtual_memory_available() == 22 * GIB
 
 
+def test_v2_memory_high_is_a_limit(cgroup):
+    cgroup.proc("0::/user.slice/run-1.scope\n")
+    scope = cgroup.v2_root / "user.slice" / "run-1.scope"
+    v2(scope, limit="max", current=4 * GIB, inactive_file=0)
+    write(scope / "memory.high", f"{16 * GIB}\n")
+    assert system_memory.cgroup_memory_limit() == 16 * GIB
+    assert system_memory.virtual_memory_available() == 12 * GIB
+
+
+def test_v2_lower_of_memory_max_and_memory_high_binds(cgroup):
+    cgroup.proc("0::/\n")
+    v2(cgroup.v2_root, limit=16 * GIB, current=4 * GIB, inactive_file=0)
+    write(cgroup.v2_root / "memory.high", f"{24 * GIB}\n")
+    assert system_memory.virtual_memory_total() == 16 * GIB
+    write(cgroup.v2_root / "memory.high", f"{8 * GIB}\n")
+    assert system_memory.virtual_memory_total() == 8 * GIB
+    assert system_memory.virtual_memory_available() == 4 * GIB
+
+
 @pytest.mark.parametrize("limit", ["max", "0", "-1", ""])
 def test_v2_unlimited_and_unusable_limit_values_are_ignored(cgroup, limit):
     cgroup.proc("0::/\n")

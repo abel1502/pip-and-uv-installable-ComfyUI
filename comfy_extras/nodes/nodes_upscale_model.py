@@ -158,6 +158,10 @@ class ImageUpscaleWithModel(io.ComfyNode):
 
     @classmethod
     def execute(cls, upscale_model: UpscaleModelManageable, image: RGBImageBatch) -> io.NodeOutput:
+        alpha = None
+        if image.shape[-1] == 4:
+            alpha = image[..., 3:4]
+            image = image[..., :3]
         upscale_model.set_input_size_from_images(image)
         load_models_gpu([upscale_model], force_full_load=True)
         in_img = image.movedim(-1, -3).to(upscale_model.current_device, dtype=upscale_model.model_dtype()).to(upscale_model.load_device)
@@ -188,6 +192,9 @@ class ImageUpscaleWithModel(io.ComfyNode):
         s = torch.clamp(s.movedim(-3, -1), min=0, max=1.0).to(model_management.intermediate_dtype())
         if s.shape[-1] == 1:
             s = s.expand(-1, -1, -1, 3)
+        if alpha is not None:
+            alpha = utils.common_upscale(alpha.movedim(-1, -3).to(s), s.shape[2], s.shape[1], "bilinear", "disabled")
+            s = torch.cat((s, alpha.movedim(-3, -1)), dim=-1)
         return io.NodeOutput(s)
 
     upscale = execute  # TODO: remove

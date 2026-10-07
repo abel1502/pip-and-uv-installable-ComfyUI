@@ -39,6 +39,7 @@ from . import weight_cast
 from . import weight_cast_ops
 from .cli_args import PerformanceFeature
 from .cli_args import args
+import dataclasses
 from .execution_context import current_execution_context
 from .interruption import throw_exception_if_processing_interrupted
 
@@ -1535,10 +1536,10 @@ Operations = typing.Type[typing.Union[manual_cast, fp8_ops, disable_weight_init,
 # Mixed Precision Operations
 # ==============================================================================
 from . import quant_ops
-from .quant_ops import TensorWiseINT8Layout
 from .quant_ops import QUANT_ALGOS
 from .quant_ops import QuantizedTensor
 from .quant_ops import TensorCoreFP8Layout
+from .quant_ops import TensorWiseINT8Layout
 from .quant_ops import get_layout_class
 from .quant_ops import int8_quantization_available
 from .quant_ops import mixed_precision_quantization_available
@@ -2195,7 +2196,8 @@ def mixed_precision_ops(quant_config={}, compute_dtype=torch.bfloat16, full_prec
                 if getattr(self, 'layout_type', None) is not None:
                     try:
                         # dtype is now implicit in the layout class
-                        weight = QuantizedTensor.from_float(weight, self.layout_type, scale="recalculate", stochastic_rounding=seed, inplace_ops=True).to(self.weight.dtype)
+                        weight = QuantizedTensor.from_float(weight, self.layout_type, scale="recalculate", stochastic_rounding=seed, inplace_ops=True,
+                                                            **_requantize_kwargs(self.weight)).to(self.weight.dtype)
                     except NotImplementedError:
                         # Offline-calibrated layouts (SVDQuant, AWQ) cannot
                         # requantize a patched weight; keep it dense instead.
@@ -2263,8 +2265,18 @@ def mixed_precision_ops(quant_config={}, compute_dtype=torch.bfloat16, full_prec
             def _apply(self, fn, recurse=True):
                 return _quantized_apply(self, fn, recurse)
 
-            def _load_from_state_dict(self, *args):
-                _load_quantized_module(self, super()._load_from_state_dict, *args, load_extra_params=False)
+            def _load_from_state_dict(self, state_dict, prefix, *args):
+                layer_conf = state_dict.get(f"{prefix}comfy_quant", None)
+                quant_format = json.loads(layer_conf.numpy().tobytes()).get("format") if layer_conf is not None else None
+                scale = state_dict.get(f"{prefix}weight_scale", None)
+                if quant_format == "asym_w4a8_int8" or (quant_format == "int8_tensorwise" and scale is not None and scale.ndim == 3):
+                    # per-row scaled layouts are 2-D only: keep the bank as [E * out, in] and slice rows per expert
+                    for name in ("weight", "weight_scale", "weight_s_rel", "weight_s_channel"):
+                        t = state_dict.get(f"{prefix}{name}", None)
+                        if t is not None and t.ndim > 1 and t.shape[0] == self.num_experts:
+                            state_dict[f"{prefix}{name}"] = t.reshape(self.num_experts * t.shape[1], *t.shape[2:])
+                    self._orig_shape = (self.num_experts * self.out_features, self.in_features)
+                _load_quantized_module(self, super()._load_from_state_dict, state_dict, prefix, *args, load_extra_params=False)
 
             def expert_weight(self, i: int):
                 """Expert i's weight (Tensor or per-expert QuantizedTensor view)."""
@@ -2272,18 +2284,42 @@ def mixed_precision_ops(quant_config={}, compute_dtype=torch.bfloat16, full_prec
                     return self._expert_qt_from(self.weight, i)
                 return self.weight[i]
 
+            def _cast_bank(self, input):
+                # A quantized bank stays quantized: the layouts dequantize one [out, in] matrix at a time, per expert.
+                if isinstance(self.weight, QuantizedTensor):
+                    return CastBiasWeightContext(self, input=None, dtype=self.weight.dtype, device=input.device, bias_dtype=input.dtype, offloadable=True)
+                return CastBiasWeightContext(self, input, offloadable=True)
+
+            def _dequantize_bank(self, weight, dtype):
+                # in expert chunks: the W4A8 dequantize kernel allocates over twice its output in temporaries
+                flat = QuantizedTensor(weight._qdata, weight._layout_cls, dataclasses.replace(weight._params, orig_dtype=dtype))
+                out = torch.empty((self.num_experts, self.out_features, self.in_features), dtype=dtype, device=weight.device)
+                step = max(1, (256 << 20) // (self.out_features * self.in_features * out.element_size()))
+                for first in range(0, self.num_experts, step):
+                    last = min(first + step, self.num_experts)
+                    out[first:last] = self._bank_rows(flat, first, last).dequantize().view(last - first, self.out_features, self.in_features)
+                return out
+
+            def _bank_rows(self, weight: QuantizedTensor, first: int, last: int) -> QuantizedTensor:
+                """Experts [first, last) of a flat [E * out, in] bank as one QuantizedTensor."""
+                params = weight._params
+                rows = slice(first * self.out_features, last * self.out_features)
+                per_row = {f.name: getattr(params, f.name)[rows] for f in dataclasses.fields(params) if torch.is_tensor(getattr(params, f.name)) and getattr(params, f.name).ndim >= 1 and getattr(params, f.name).shape[0] == weight._qdata.shape[0]}
+                return QuantizedTensor(weight._qdata[rows], weight._layout_cls, dataclasses.replace(params, orig_shape=((last - first) * self.out_features, self.in_features), **per_row))
+
             @contextlib.contextmanager
             def bank_resident(self, input):
                 """Cast the whole bank once; expert_linear inside reuses the cast.
                 Not re-entrant — do not nest calls on the same instance.
                 """
-                weight, bias, offload_stream = cast_bias_weight(self, input, offloadable=True)
-                self._resident_bank = (weight, bias)
-                try:
-                    yield self
-                finally:
-                    self._resident_bank = None
-                    uncast_bias_weight(self, weight, bias, offload_stream)
+                with self._cast_bank(input) as (weight, bias):
+                    if self._full_precision_mm and isinstance(weight, QuantizedTensor) and weight._qdata.ndim == 2:  # flat per-row banks; 3-D banks dequantize per expert
+                        weight = self._dequantize_bank(weight, input.dtype)
+                    self._resident_bank = (weight, bias)
+                    try:
+                        yield self
+                    finally:
+                        self._resident_bank = None
 
             def expert_linear(self, input: torch.Tensor, i: int) -> torch.Tensor:
                 """Linear against expert i's weight (with optional bias)."""
@@ -2291,17 +2327,14 @@ def mixed_precision_ops(quant_config={}, compute_dtype=torch.bfloat16, full_prec
                 if resident is not None:
                     weight, bias = resident
                     return self._expert_linear_impl(input, weight, bias, i)
-                weight, bias, offload_stream = cast_bias_weight(self, input, offloadable=True)
-                try:
+                with self._cast_bank(input) as (weight, bias):
                     return self._expert_linear_impl(input, weight, bias, i)
-                finally:
-                    uncast_bias_weight(self, weight, bias, offload_stream)
 
             def _expert_linear_impl(self, input, weight, bias, i):
                 if isinstance(weight, QuantizedTensor):
                     qw = self._expert_qt_from(weight, i)
                 else:
-                    qw = weight[i]
+                    qw = cast_to_input(weight[i], input, copy=False)
                 b = cast_to_input(bias[i], input, copy=False) if bias is not None else None
 
                 if isinstance(qw, QuantizedTensor):
@@ -2313,12 +2346,13 @@ def mixed_precision_ops(quant_config={}, compute_dtype=torch.bfloat16, full_prec
                     if use_fast:
                         qin = QuantizedTensor.from_float(input, self.layout_type)
                         return torch.nn.functional.linear(qin, qw, b)
-                    out = input @ qw.dequantize().t()
-                    return out + b if b is not None else out
+                    qw = cast_to_input(qw.dequantize(), input, copy=False)
                 return torch.nn.functional.linear(input, qw, b)
 
             def _expert_qt_from(self, weight: QuantizedTensor, i: int) -> QuantizedTensor:
                 """Build a per-expert QuantizedTensor by indexing into a resident bank."""
+                if weight._qdata.ndim == 2:
+                    return self._bank_rows(weight, i, i + 1)
                 params = weight._params
                 kwargs = {
                     "scale": params.scale[i] if params.scale.dim() else params.scale,
@@ -2329,6 +2363,8 @@ def mixed_precision_ops(quant_config={}, compute_dtype=torch.bfloat16, full_prec
                     kwargs["block_scale"] = params.block_scale[i]
                 if hasattr(params, "quant_group_size"):
                     kwargs["quant_group_size"] = params.quant_group_size
+                if hasattr(params, "convrot"):
+                    kwargs["convrot"] = params.convrot
                 if hasattr(params, "convrot_groupsize"):
                     kwargs["convrot_groupsize"] = params.convrot_groupsize
                 if hasattr(params, "linear_dtype"):
@@ -2435,6 +2471,20 @@ def mixed_precision_ops(quant_config={}, compute_dtype=torch.bfloat16, full_prec
                 return super().forward_comfy_cast_weights(input, out_dtype=out_dtype)
 
     return MixedPrecisionOps
+
+def _requantize_kwargs(weight) -> dict:
+    """The quantization a patched weight is requantized with: the one it was loaded in. An INT8
+    ConvRot weight stays Hadamard-rotated with per-output-channel scales, and a per-channel INT8
+    weight keeps its per-channel scales, instead of falling back to one unrotated tensorwise scale."""
+    if not isinstance(weight, QuantizedTensor) or weight._layout_cls != "TensorWiseINT8Layout":
+        return {}
+    params = weight._params
+    if getattr(params, "convrot", False):
+        return {"per_channel": True, "convrot": True, "convrot_groupsize": int(params.convrot_groupsize)}
+    if params.scale.numel() > 1:
+        return {"per_channel": True}
+    return {}
+
 
 def get_disabled_quant_formats(device=None):
     """Quantized formats whose fast matmul must be emulated on ``device``."""

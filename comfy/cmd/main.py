@@ -143,87 +143,97 @@ async def _prompt_worker(q: AbstractPromptQueue, server_instance: server_module.
     need_gc = False
     gc_collect_interval = 10.0
     current_time = 0.0
-    while not _shutdown_event.is_set():
-        timeout = 1.0
-        if need_gc:
-            timeout = max(min(gc_collect_interval - (current_time - last_gc_collect), 1.0), 0.0)
+    background_scan_paused = False
+    try:
+        while not _shutdown_event.is_set():
+            timeout = 1.0
+            if need_gc:
+                timeout = max(min(gc_collect_interval - (current_time - last_gc_collect), 1.0), 0.0)
 
-        queue_item = q.get(timeout=timeout)
-        if queue_item is not None:
-            item, item_id = queue_item
-            execution_start_time = time.perf_counter()
-            prompt_id = item[1]
-            server_instance.last_prompt_id = prompt_id
+            queue_item = q.get(timeout=timeout)
+            if queue_item is not None:
+                item, item_id = queue_item
+                execution_start_time = time.perf_counter()
+                prompt_id = item[1]
+                server_instance.last_prompt_id = prompt_id
 
-            sensitive = item[5]
-            extra_data = item[3].copy()
-            for k in sensitive:
-                extra_data[k] = sensitive[k]
+                sensitive = item[5]
+                extra_data = item[3].copy()
+                for k in sensitive:
+                    extra_data[k] = sensitive[k]
 
-            # todo: ??? what jank
-            remove_sensitive = lambda prompt: prompt[:5] + prompt[6:]
+                # todo: ??? what jank
+                remove_sensitive = lambda prompt: prompt[:5] + prompt[6:]
 
-            asset_manager.pause_background_scan()
-            await e.execute_async(item[2], prompt_id, item[3], item[4])
-            need_gc = True
+                asset_manager.pause_background_scan()
+                background_scan_paused = True
+                await e.execute_async(item[2], prompt_id, item[3], item[4])
+                need_gc = True
 
-            error_details = None
-            if not e.success:
-                for event, data in e.status_messages:
-                    if event == "execution_error":
-                        error_details = data
-                        break
+                error_details = None
+                if not e.success:
+                    for event, data in e.status_messages:
+                        if event == "execution_error":
+                            error_details = data
+                            break
 
-            messages = [f"{event}: {data.get('exception_message', str(data))}" if isinstance(data, dict) and 'exception_message' in data else f"{event}" for event, data in e.status_messages]
+                messages = [f"{event}: {data.get('exception_message', str(data))}" if isinstance(data, dict) and 'exception_message' in data else f"{event}" for event, data in e.status_messages]
 
-            q.task_done(item_id,
-                        e.history_result,
-                        status=queue_types.ExecutionStatus(
-                            status_str='success' if e.success else 'error',
-                            completed=e.success,
-                            messages=messages),
-                        error_details=error_details,
-                        process_item=remove_sensitive,
-                        )
+                q.task_done(item_id,
+                            e.history_result,
+                            status=queue_types.ExecutionStatus(
+                                status_str='success' if e.success else 'error',
+                                completed=e.success,
+                                messages=messages),
+                            error_details=error_details,
+                            process_item=remove_sensitive,
+                            )
 
-            if server_instance.client_id is not None:
-                server_instance.send_sync("executing", {"node": None, "prompt_id": prompt_id}, server_instance.client_id)
+                if server_instance.client_id is not None:
+                    server_instance.send_sync("executing", {"node": None, "prompt_id": prompt_id}, server_instance.client_id)
 
-            current_time = time.perf_counter()
-            execution_time = current_time - execution_start_time
+                current_time = time.perf_counter()
+                execution_time = current_time - execution_start_time
 
-            # Log Time in a more readable way after 10 minutes
-            if execution_time > 600:
-                execution_time = time.strftime("%H:%M:%S", time.gmtime(execution_time))
-                logger.info(f"Prompt executed in {execution_time}")
-            else:
-                logger.info("Prompt executed in {:.2f} seconds".format(execution_time))
+                # Log Time in a more readable way after 10 minutes
+                if execution_time > 600:
+                    execution_time = time.strftime("%H:%M:%S", time.gmtime(execution_time))
+                    logger.info(f"Prompt executed in {execution_time}")
+                else:
+                    logger.info("Prompt executed in {:.2f} seconds".format(execution_time))
 
 
-        flags = q.get_flags()
-        free_memory = flags.get("free_memory", False)
+            flags = q.get_flags()
+            free_memory = flags.get("free_memory", False)
 
-        if flags.get("unload_models", free_memory):
-            model_management.unload_all_models()
-            need_gc = True
-            last_gc_collect = 0
+            if flags.get("unload_models", free_memory):
+                model_management.unload_all_models()
+                need_gc = True
+                last_gc_collect = 0
 
-        if free_memory:
-            e.reset()
-            need_gc = True
-            last_gc_collect = 0
+            if free_memory:
+                e.reset()
+                need_gc = True
+                last_gc_collect = 0
 
-        if need_gc:
-            current_time = time.perf_counter()
-            if (current_time - last_gc_collect) > gc_collect_interval:
-                gc.collect()
-                model_management.soft_empty_cache()
-                last_gc_collect = current_time
-                need_gc = False
-                hook_breaker_ac10a0.restore_functions()
+            if need_gc:
+                current_time = time.perf_counter()
+                if (current_time - last_gc_collect) > gc_collect_interval:
+                    gc.collect()
+                    model_management.soft_empty_cache()
+                    last_gc_collect = current_time
+                    need_gc = False
+                    hook_breaker_ac10a0.restore_functions()
 
-                asset_manager.queue_output_scan()
+                    asset_manager.queue_output_scan()
+                    asset_manager.resume_background_scan()
+                    background_scan_paused = False
+    finally:
+        if background_scan_paused:
+            try:
                 asset_manager.resume_background_scan()
+            except Exception:
+                logger.exception("Failed to resume background asset scanning after prompt worker exit")
 
 
 def prompt_worker(q: AbstractPromptQueue, server_instance: server_module.PromptServer, asset_manager: AssetManager | None = None):

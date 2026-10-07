@@ -590,6 +590,7 @@ class SDTokenizer:
             tokenizer_path = get_package_as_path('comfy.sd1_tokenizer')
         self.tokenizer_class = tokenizer_class
         self.tokenizer_path = tokenizer_path
+        self.tokenizer_args = tokenizer_args
         self.tokenizer: PreTrainedTokenizerBase | SPieceTokenizer = tokenizer_class.from_pretrained(tokenizer_path, **tokenizer_args)
         self.max_length = tokenizer_data.get("{}_max_length".format(embedding_key), max_length)
         self.min_length = tokenizer_data.get("{}_min_length".format(embedding_key), min_length)
@@ -644,6 +645,12 @@ class SDTokenizer:
 
     def clone(self) -> SDTokenizerT:
         sd_tokenizer = copy.copy(self)
+        if "tokenizer_object" in getattr(self, "tokenizer_args", {}):
+            # built from an in-memory object (Mistral's tekken tokenizer), which from_pretrained cannot
+            # load again: the clone takes a copy of it, additional vocab included
+            sd_tokenizer.tokenizer = copy.deepcopy(self.tokenizer)
+            sd_tokenizer.inv_vocab = dict(self.inv_vocab)
+            return sd_tokenizer
         # correctly copy additional vocab
         sd_tokenizer.tokenizer = self.tokenizer_class.from_pretrained(self.tokenizer_path, legacy=True)
         sd_tokenizer.add_tokens(sd_tokenizer.additional_tokens)

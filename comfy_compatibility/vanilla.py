@@ -355,25 +355,32 @@ def patch_pip_install_popen():
 
 
 @contextmanager
+def vanilla_node_class_mappings():
+    nodes_shim = sys.modules.get('nodes')
+    if isinstance(nodes_shim, _NodeShim):
+        nodes_shim.activate()
+        try:
+            yield
+        finally:
+            nodes_shim.deactivate()
+    else:
+        yield
+
+
+@contextmanager
 def vanilla_environment_node_execution_hooks():
-    # this handles activating the NODE_CLASS_MAPPINGS shim
     from comfy.execution_context import current_execution_context
     from comfy.nodes.download_interception import patch_folder_paths_functions
     ctx = current_execution_context()
 
     if 'nodes' in sys.modules and isinstance(sys.modules['nodes'], _NodeShim):
-        nodes_shim: _NodeShim = sys.modules['nodes']
-        try:
-            nodes_shim.activate()
-
-            block_installs = ctx and ctx.configuration and ctx.configuration.block_runtime_package_installation is True
-            with (
-                patch_folder_paths_functions(),
-                patch_pip_install_subprocess_run() if block_installs else nullcontext(),
-                patch_pip_install_popen() if block_installs else nullcontext(),
-            ):
-                yield
-        finally:
-            nodes_shim.deactivate()
+        block_installs = ctx and ctx.configuration and ctx.configuration.block_runtime_package_installation is True
+        with (
+            vanilla_node_class_mappings(),
+            patch_folder_paths_functions(),
+            patch_pip_install_subprocess_run() if block_installs else nullcontext(),
+            patch_pip_install_popen() if block_installs else nullcontext(),
+        ):
+            yield
     else:
         yield

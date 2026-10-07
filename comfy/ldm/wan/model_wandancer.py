@@ -1,17 +1,24 @@
+from .. import common_dit
+from ..flux.layers import EmbedND
+from ..flux.math import apply_rope1
+from ..modules.attention import AttentionTensorContainer
+from ..modules.attention import ComfyAttention
+from ..modules.attention import optimized_attention
 import torch
 import torch.nn as nn
-from .. import common_dit
-from ..modules.attention import optimized_attention
-from ..flux.math import apply_rope1
-from ..flux.layers import EmbedND
 
-from .model import AudioInjector_WAN, WanModel, MLPProj, Head, sinusoidal_embedding_1d
+from .model import AudioInjector_WAN
+from .model import Head
+from .model import MLPProj
+from .model import WanModel
+from .model import sinusoidal_embedding_1d
 
 
 class MusicSelfAttention(nn.Module):
     def __init__(self, dim, num_heads, device=None, dtype=None, operations=None):
         assert dim % num_heads == 0
         super().__init__()
+        self.comfy_attention = ComfyAttention()
         self.embed_dim = dim
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
@@ -30,11 +37,13 @@ class MusicSelfAttention(nn.Module):
         k = self.k_proj(x).view(b, s, n, d)
         k = apply_rope1(k, freqs)
 
+        q = AttentionTensorContainer(q.view(b, s, n * d))
+        k = AttentionTensorContainer(k.view(b, s, n * d))
+        v = AttentionTensorContainer(self.v_proj(x).view(b, s, n * d))
         x = optimized_attention(
-            q.view(b, s, n * d),
-            k.view(b, s, n * d),
-            self.v_proj(x).view(b, s, n * d),
+            q, k, v,
             heads=self.num_heads,
+            preferred_attention=self.comfy_attention,
         )
 
         return self.out_proj(x)

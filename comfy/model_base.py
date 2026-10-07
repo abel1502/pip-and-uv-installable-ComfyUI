@@ -86,12 +86,13 @@ from .ldm.pixart.pixartms import PixArtMS
 from .ldm.pixeldit.model import PixDiT_T2I
 from .ldm.pixeldit.pid import PidNet
 from .ldm.qwen_image.model import QwenImageTransformer2DModel
+from .ldm.qwen_image21 import model as qwen_image21_model
 from .ldm.rt_detr.rtdetr_v4 import RTv4
 from .ldm.sam3.detector import SAM3Model
 from .ldm.seedvr.model import NaDiT
-from .ldm.qwen_image21 import model as qwen_image21_model
 from .ldm.sensenova import conditioning as sensenova_conditioning
 from .ldm.sensenova import model as sensenova_model
+from .ldm.ideogram4.sampling import ModelSamplingIdeogram4
 from .ldm.sensenova.sampling import SenseNovaModelSampling
 from .ldm.sensenova.sampling import time_snr_shift
 from .ldm.trellis2.model import Trellis2 as Trellis2Model
@@ -121,6 +122,7 @@ from .model_sampling import ModelSamplingCosmosRFlow
 from .model_sampling import ModelSamplingDiscrete
 from .model_sampling import ModelSamplingDiscreteFlow
 from .model_sampling import ModelSamplingFlux
+from .model_sampling import ModelSamplingFluxDynamicShift
 from .model_sampling import StableCascadeSampling
 from .model_sampling import V_PREDICTION
 from .model_sampling import V_PREDICTION_DDPM
@@ -1753,6 +1755,16 @@ class Lumina2(BaseModel):
             out['ref_latents'] = list([1, 16, sum(map(lambda a: math.prod(a.size()[2:]), ref_latents))])
         return out
 
+class MingImage(Lumina2):
+    def extra_conds(self, **kwargs):
+        ref_latents = kwargs.pop("reference_latents", None)
+        out = super().extra_conds(**kwargs)
+        direct_context = kwargs.get("direct_context", None)
+        if direct_context is not None:
+            out['direct_context'] = CONDRegular(direct_context)
+        if ref_latents is not None:
+            out['ref_frames'] = conds.CONDList([self.process_latent_in(lat)[:, :, f] for lat in ref_latents for f in range(lat.shape[2])])
+        return out
 
 class ZImagePixelSpace(Lumina2):
     def __init__(self, model_config, model_type=ModelType.FLOW, device=None):
@@ -2896,6 +2908,7 @@ class MageFlow(QwenImage):
 class QwenImage21(QwenImage):
     def __init__(self, model_config, model_type=ModelType.FLUX, device=None):
         super().__init__(model_config, model_type, device=device, unet_model=qwen_image21_model.QwenImage21Transformer2DModel)
+        self.model_sampling = ModelSamplingFluxDynamicShift(model_config)
 
     def get_dynamic_vram__units(self):
         return list(self.diffusion_model.transformer_blocks), []
@@ -2947,16 +2960,20 @@ class JoyImage(BaseModel):
 class Ideogram4(BaseModel):
     def __init__(self, model_config, model_type=ModelType.FLOW, device=None):
         super().__init__(model_config, model_type, device=device, unet_model=Ideogram4Transformer2DModel)
+        self.model_sampling = ModelSamplingIdeogram4(model_config)
 
     def extra_conds(self, **kwargs):
         out = super().extra_conds(**kwargs)
+        cross_attn = kwargs.get("cross_attn", None)
+        # pipeline_ideogram4's unconditional pass is image-only; zeroed-out text conditioning is that pass
+        if cross_attn is None or torch.count_nonzero(cross_attn) == 0:
+            out.pop('c_crossattn', None)
+            return out
         attention_mask = kwargs.get("attention_mask", None)
         if attention_mask is not None:
             if torch.numel(attention_mask) != attention_mask.sum():
                 out['attention_mask'] = conds.CONDRegular(attention_mask)
-        cross_attn = kwargs.get("cross_attn", None)
-        if cross_attn is not None:
-            out['c_crossattn'] = conds.CONDRegular(cross_attn)
+        out['c_crossattn'] = conds.CONDRegular(cross_attn)
         return out
 
 class Krea2(BaseModel):

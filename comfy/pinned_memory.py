@@ -55,7 +55,10 @@ def get_pin(module, subset="weights"):
 
     _, _, stack_split, pinned_size, *_ = module._pin_state[subset]
     size = pin.nbytes
-    model_management.ensure_pin_registerable(size)
+    # the host buffer is already allocated, so re-registering it only has to
+    # fit under the registration ceiling
+    if not model_management.ensure_pin_registerable(size):
+        return pin
 
     if torch.cuda.cudart().cudaHostRegister(pin.data_ptr(), size, 1) != 0:
         model_management.discard_cuda_async_error()
